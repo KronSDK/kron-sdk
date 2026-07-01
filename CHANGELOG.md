@@ -3,6 +3,12 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.2.1
+
+### Changed
+- Docs only: corrected the version badge, added this changelog, and removed third-party project names from
+  the indexer references. No code or API changes.
+
 ## 0.2.0
 
 ### Added
