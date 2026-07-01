@@ -20,8 +20,8 @@ record.
 - **The indexer is a read layer, not the source of truth.** It follows the node's accepted-tx stream and
   exposes a fast, queryable view of state. If it went away, nothing is lost — the state is on-chain and
   reconstructable. This matters for integrators: **you never have to trust the indexer for correctness of
-  funds**, only for convenience of querying. (Contrast with KRC-20 / Kasplex, where the off-chain indexer
-  *is* the ledger.)
+  funds**, only for convenience of querying. (Contrast with rollup-style token standards, where an
+  off-chain indexer *is* the ledger.)
 - **Two phases per token.** A token launches on a **bonding curve** (`curve_cp`), and once it raises its
   graduation target it **graduates** into a **constant-product AMM pool** (`amm_pool_cp_v3`). Reads and
   trades differ slightly by phase — see §4.

@@ -1,7 +1,7 @@
 // Typed wrapper for the KCC-20 indexer's REST + SSE surface (docs/INTEGRATION.md §4 in the kron repo).
-// Mirrors the KRC-20/Kasplex indexer response shape ({ message, result }) so existing Kaspa tooling adapts
-// with minimal changes. Amounts are decimal strings in base units (apply `dec` to render); KAS values
-// inside `cpState` are sompi unless noted as SCALE units.
+// Uses the common Kaspa token-indexer response shape ({ message, result }) so existing tooling adapts with
+// minimal changes. Amounts are decimal strings in base units (apply `dec` to render); KAS values inside
+// `cpState` are sompi unless noted as SCALE units.
 
 export type Envelope<T> = { message: string; result: T };
 
