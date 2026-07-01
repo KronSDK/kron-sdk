@@ -1,0 +1,55 @@
+{
+  "name": "@kronsdk/kron-sdk",
+  "version": "0.1.1",
+  "description": "Build, sign, and submit transactions against KRON's native-L1 Kaspa covenants (bonding curve + AMM pool) from any JS/TS environment — browser or Node. Reference SDK for wallet and dApp integrators.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./wasm": {
+      "types": "./dist/wasm/index.node.d.ts",
+      "browser": "./dist/wasm/index.browser.js",
+      "node": "./dist/wasm/index.node.js",
+      "default": "./dist/wasm/index.node.js"
+    }
+  },
+  "files": [
+    "dist",
+    "vendor"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "smoke": "node scripts/smoke-test-node-wasm.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.1",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kronsdk/kron-sdk"
+  },
+  "keywords": [
+    "kaspa",
+    "kron",
+    "covenant",
+    "silverscript",
+    "kcc20",
+    "wallet",
+    "dex"
+  ]
+}
