@@ -211,6 +211,45 @@ the creator signed (name, description, https image, website/x/telegram links, th
 them by `tick` / `covenantId`. Registry writes are signature-gated to the on-chain creator key —
 integrators generally only **read** this (`RegistryClient.tokens()`).
 
+### Token list — for wallets / explorers / aggregators
+
+```
+GET https://api.kron.technology/api/registry/tokenlist          # tokenlists.org-shaped, verified-only
+GET https://api.kron.technology/api/registry/tokenlist?all=1     # also include unverified tokens
+```
+
+One [tokenlists.org](https://tokenlists.org)-shaped document listing KRON tokens so standard tooling can
+ingest "what tokens exist and how do I identify them" from a single URL. `RegistryClient.tokenlist()`
+returns it typed (`TokenList` / `TokenListEntry`). Each entry's `covenantId` (covid `A`) is the canonical
+**token** id (the add-to-wallet / asset id); `extensions.poolCovenantId` (covid `P`) is the **pool/pair**
+id and is non-null only post-graduation (that's what DEX screeners key on) — the two are not
+interchangeable. The default list is **chain-verified only** (anti-phishing); `?all=1` adds unverified
+entries tagged `extensions.chainVerified:false`.
+
+**The list is not platform-signed — verify each entry against the chain yourself.** Each entry carries a
+`genesisTxid` proof pointer; `verify.verifyTokenListEntry` confirms the entry's `covenantId` is genuinely
+created on that tx (present as a `covenant_id` on one of its outputs), so a spoofed entry can't pass:
+
+```ts
+import { client, verify } from '@kronsdk/kron-sdk';
+
+const reg = new client.RegistryClient('https://api.kron.technology');
+const list = await reg.tokenlist();                 // { name, version, network, tokens: [...] }
+
+// Inject a tx fetcher — the SDK ships no Kaspa node client. kaspaRestFetchTx wraps the common REST shape.
+const fetchTx = verify.kaspaRestFetchTx('https://api-tn10.kaspa.org');
+const safe = [];
+for (const entry of list.tokens) {
+  const r = await verify.verifyTokenListEntry(entry, fetchTx);   // { ok, covenantIdPresent, reason? }
+  if (r.ok) safe.push(entry);                                    // trust only what re-checks against chain
+}
+```
+
+`fetchTx` is any `(txid) => Promise<tx>` — use `kaspaRestFetchTx(base)`, a node RPC, or a proxy. This does
+**not** re-derive the curve script from params (the SDK has no covenant compiler); the covenant-id-on-genesis
+check is the achievable, sufficient anti-spoof proof. For a full cryptographic re-derivation, feed the init
+tx's outpoint + authorized outputs to `genesis.genesisCovenantId`.
+
 ---
 
 ## 5. Write API (transactions) — via `kron-sdk`

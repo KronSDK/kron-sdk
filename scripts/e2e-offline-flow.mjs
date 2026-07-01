@@ -88,6 +88,20 @@ async function main() {
   assert(reparsed.inputs[0].signatureScript === buySpend.inputs[0].signatureScript, 'covenant input 0 signature script must be UNTOUCHED by wallet signing — this is the core fund-safety property');
   console.log('   OK — signing touched ONLY the funding input, covenant inputs untouched');
 
+  console.log('5. Token-list entry verification (verify.verifyTokenListEntry, injected stub fetcher)...');
+  const covidA = 'a1'.repeat(32);
+  const listEntry = {
+    network: 'testnet-10', covenantId: covidA, symbol: 'GHOST', name: 'Ghost', decimals: 0,
+    extensions: { curveCovenantId: 'c1'.repeat(32), poolCovenantId: null, genesisTxid: '11'.repeat(32), creator: null, creatorPubkey: null, curveParams: null, graduated: false, chainVerified: true },
+  };
+  // genesis tx that DOES create covid A (present as covenant_id on an output) -> ok
+  const okRes = await kron.verify.verifyTokenListEntry(listEntry, async () => ({ outputs: [{ covenant_id: 'c1'.repeat(32) }, { covenant_id: covidA }] }));
+  assert(okRes.ok === true, 'entry whose covid A is on its genesis tx must verify');
+  // genesis tx that does NOT -> rejected with a reason, no throw
+  const badRes = await kron.verify.verifyTokenListEntry(listEntry, async () => ({ outputs: [{ covenant_id: 'c1'.repeat(32) }] }));
+  assert(badRes.ok === false && /not found/.test(badRes.reason), 'entry whose covid A is absent must be rejected');
+  console.log('   OK — verifier accepts a genuine entry, rejects a spoofed one');
+
   console.log('\nALL OFFLINE FLOW CHECKS PASSED.');
 }
 

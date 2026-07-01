@@ -24,3 +24,4 @@ export * as vesting from './native/vestingTx.js';
 
 export * as wallet from './wallet/index.js';
 export * as client from './client/index.js';
+export * as verify from './verify/index.js';

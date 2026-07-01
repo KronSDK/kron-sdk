@@ -21,14 +21,19 @@
   },
   "files": [
     "dist",
-    "vendor"
+    "vendor",
+    "THIRD_PARTY_LICENSES.md"
   ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "smoke": "node scripts/smoke-test-node-wasm.mjs"
+    "smoke": "node scripts/smoke-test-node-wasm.mjs",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
     "@types/node": "^26.0.1",

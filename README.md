@@ -30,6 +30,16 @@ npm install @kronsdk/kron-sdk
 
 ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for why.
 
+**Updating.** Already installed? Pull the latest published release:
+
+```bash
+npm install @kronsdk/kron-sdk@latest      # newest
+npm install @kronsdk/kron-sdk@0.2.0       # or pin an exact version for reproducible builds
+```
+
+The package follows semver. The token-list client (`client.RegistryClient.tokenlist()`) and on-chain
+verifier (`verify.verifyTokenListEntry`) landed in **0.2.0** — see [Discover & verify tokens](#discover--verify-tokens-token-list).
+
 ## Quickstart — quote a curve buy (Node)
 
 ```ts
@@ -65,6 +75,41 @@ console.log(`100 TKAS -> ${quote.tokenOut} tokens, fee ${quote.fee} sompi`);
 See [`docs/INTEGRATION.md`](docs/INTEGRATION.md) for the full read/write API + worked recipes (wallet
 portfolio render, "Send" button, TG bot price command, pool swap).
 
+## Discover & verify tokens (token list)
+
+**New in this release.** KRON now publishes a [tokenlists.org](https://tokenlists.org)-shaped **token
+list** — one URL a wallet, explorer, or price aggregator can read to discover every KRON token and how to
+identify it, instead of hand-rolling registry calls. Covenant tokens are new to the ecosystem, so this is
+the bridge that lets existing tooling recognize them. `client.RegistryClient.tokenlist()` returns it typed.
+
+Because the list is **not platform-signed**, every entry is **independently verifiable against the chain** —
+it carries its `covenantId` (the canonical token id) plus a `genesisTxid` proof pointer, and
+`verify.verifyTokenListEntry` confirms the token was genuinely created on that transaction. A spoofed entry
+can't slip through, and trust is rooted in Kaspa, not in KRON's server.
+
+```ts
+import { client, verify } from '@kronsdk/kron-sdk';
+
+const reg = new client.RegistryClient('https://api.kron.technology');
+const list = await reg.tokenlist();                 // { name, version, network, tokens } — verified-only
+// const all = await reg.tokenlist({ all: true });  // include unverified, each tagged chainVerified:false
+
+// Verify each entry against the chain before trusting it. `fetchTx` is INJECTED — the SDK ships no Kaspa
+// node client; kaspaRestFetchTx wraps the common REST shape (or pass your own node RPC / proxy).
+const fetchTx = verify.kaspaRestFetchTx('https://api-tn10.kaspa.org');
+const safe = [];
+for (const entry of list.tokens) {
+  const r = await verify.verifyTokenListEntry(entry, fetchTx);   // { ok, covenantIdPresent, reason? }
+  if (r.ok) safe.push(entry);
+}
+```
+
+`covenantId` (covid `A`) is the **token** id — what a wallet adds/tracks. `extensions.poolCovenantId`
+(covid `P`) is the **pool/pair** id, non-null only post-graduation — what a DEX aggregator lists. The
+verifier can't re-derive the covenant script from params (this package has no compiler); the
+covenant-id-on-genesis check is the achievable, sufficient anti-spoof proof. Full schema:
+[`docs/INTEGRATION.md`](docs/INTEGRATION.md).
+
 ## What's in the box
 
 ```
@@ -76,7 +121,8 @@ kron-sdk
 ├─ vesting            claim / claimFinal against an EXISTING vesting lock
 ├─ spend              tx assembly + the signPskt-style wallet-signing bridge
 ├─ wallet             WalletAdapter interface + a generic reference implementation (see docs/WALLETS.md)
-├─ client             typed REST clients: indexer, registry, sequencer
+├─ client             typed REST clients: indexer, registry (incl. tokenlist()), sequencer
+├─ verify             verify a token-list entry against the chain (anti-spoof, fetcher-injected)
 └─ /wasm              loadKaspa() — the only environment-specific (Node vs browser) export
 ```
 
