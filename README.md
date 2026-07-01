@@ -4,7 +4,7 @@
 — a bonding-curve launchpad + AMM DEX — from any JS/TS environment.** Browser or Node. No custody, ever:
 this package only *builds* transactions; a wallet (yours, or your user's) signs them.
 
-> **Status: v0.1.0, testnet (TN10).** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.2.0, testnet (TN10).** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract and how to
 > adapt it to a specific wallet's injected provider.
