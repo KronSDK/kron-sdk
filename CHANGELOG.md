@@ -3,6 +3,24 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.3.0
+
+### Added
+- **Curve sequencing** — `client.SequencerClient.curveHead()` / `.curveSubmit()` wrap the sequencer's
+  pre-graduation bonding-curve endpoints (`/curve/head`, `/curve/submit`), so integrators can chain
+  launch-phase buys/sells on a hot token exactly like pool swaps (same non-custodial model: build + sign
+  locally, the sequencer only orders and relays). `health()` now types the `markets` capability field.
+  New types: `CurveSequencerHead`, `CurveHeadResult`.
+- **Partner attribution** — optional `ref` on `submit()` and `curveSubmit()`: wallet-integrator partners
+  (kron.technology/wallets) tag their trades with their partner tag (2–32 chars `a-z 0-9 - _`); tagged
+  trades are recorded server-side per-trade as the revenue-share settlement record. Malformed tags are
+  rejected with 400 (fail loudly on the first submit, not silently at settlement). `health()` types the
+  `attribution` capability flag.
+
+### Changed
+- Docs: `INTEGRATION.md` §6 rewritten to cover both sequencer markets (the "pool-only" caveat is gone —
+  the deployed sequencer reports `markets: ['pool','curve']`).
+
 ## 0.2.1
 
 ### Changed

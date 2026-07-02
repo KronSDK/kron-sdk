@@ -49,7 +49,7 @@ All services are live on Kaspa **testnet-10**.
 |---|---|---|
 | **Indexer** (KCC-20 API) | `https://idx.kron.technology` | Balances, metadata, prices, holders, pool state, history, SSE. Path prefix `/v1/kcc20`. |
 | **Backend** (registry) | `https://api.kron.technology` | Token metadata registry (name/image/links/socials), LP positions, comments, alerts. |
-| **Sequencer** | `https://seq.kron.technology` | Non-custodial batcher for **post-graduation pool swaps** under contention. Pool-only. |
+| **Sequencer** | `https://seq.kron.technology` | Non-custodial batcher for hot markets: **post-graduation pool swaps** and **pre-graduation curve buys/sells** (`/curve/*`). |
 | **Node** (wRPC) | `wss://node.kron.technology` | Kaspa wRPC (borsh) over wss — UTXO set, submit tx. `testnet-10`. |
 | **Frontend** | `https://kron.technology` | Reference UI (useful for cross-checking behavior). |
 
@@ -321,20 +321,24 @@ reads. Use the SSE stream to know exactly when.
 
 ---
 
-## 6. Sequencer (post-graduation pool swaps)
+## 6. Sequencer (hot pools and hot curves)
 
-A graduated pool is a **single hot UTXO**: concurrent swaps contend for it. The sequencer is a
-**non-custodial batcher** that orders signed swap txs into a valid chain so they don't collide. It never
-holds keys — you still sign locally. `kron-sdk`'s `SequencerClient` wraps this.
+A graduated pool is a **single hot UTXO**: concurrent swaps contend for it. The same is true of a
+pre-graduation bonding curve during a launch burst. The sequencer is a **non-custodial batcher** that
+orders signed txs into a valid chain so they don't collide. It never holds keys — you still sign
+locally. `kron-sdk`'s `SequencerClient` wraps both markets; `health()` reports which the deployment
+supports (`markets: ['pool','curve']`).
 
 ```
 GET  /health
-GET  /head?pool={poolP2SH}        # current in-flight head + queue depth
-GET  /events?pool={poolP2SH}      # SSE: head changes
-POST /submit                      # enqueue a signed swap
+GET  /head?pool={poolP2SH}        # pool: current in-flight head + queue depth
+GET  /events?pool={poolP2SH}      # pool: SSE head changes
+POST /submit                      # pool: enqueue a signed swap
+GET  /curve/head?covid={covid}    # curve: current in-flight head + queue depth
+POST /curve/submit                # curve: enqueue a signed buy/sell
 ```
 
-Swap flow:
+Pool swap flow:
 
 1. `sequencer.head(poolP2sh)` → the in-flight head `{ head, depth }` (use this instead of the indexer's
    confirmed `poolhead` when the pool is busy, so you build on the latest unconfirmed state).
@@ -342,8 +346,30 @@ Swap flow:
 3. `sequencer.submit({...})` → `{ ok: true, txid, position }` on accept, or `{ ok: false, reason, retry:
    true }` if your `prevHead` is stale (re-fetch head and rebuild).
 
-The sequencer is **pool-only** — it does **not** cover pre-graduation curve buys (those are a separate
-batching track). Direct node submission also works for low-contention pools.
+Curve trade flow (pre-graduation buys/sells) is the same shape, keyed by the token's **curve covenant
+id** instead of the pool P2SH:
+
+1. `sequencer.curveHead(curveCovid)` → `{ head, depth }`. `head: null` means no chain is in flight —
+   build against the confirmed curve state from the node/indexer instead.
+2. Build + sign the buy/sell against that head (`prevHead.poolOutpoint` = the curve UTXO,
+   `prevHead.poolTokenOutpoint` = the curve-owned inventory; reserves are `realKas`/`tokenReserve`/`vKas`).
+3. `sequencer.curveSubmit({ covid, signedTx, prevHead, declaredReserves })` → same result shape,
+   including the stale-`prevHead` retry gate.
+
+### Partner attribution (`ref`)
+
+Wallet-integrator partners (kron.technology/wallets) pass their assigned partner tag as the
+optional `ref` field on `submit()` and `curveSubmit()` — 2–32 chars of `a-z 0-9 - _`,
+case-insensitive. Each successfully relayed tagged trade is recorded server-side
+(`{ ts, market, key, txid, ref }`) as the settlement record for your revenue share, joinable
+against the indexer's per-trade feed by `txid`. A malformed tag is rejected with `400` so a
+misconfigured integration fails loudly on its first submit instead of silently at settlement; an
+absent tag is fine. **Only sequencer-routed trades carry attribution** — route trades through the
+sequencer (recommended for hot markets anyway) for them to count. The deployed sequencer
+advertises support via `health().attribution`.
+
+In both markets, direct node submission also works under low contention — the sequencer is a
+convenience for hot markets, and any sequencer-side gate should fall back to direct submission.
 
 ---
 
