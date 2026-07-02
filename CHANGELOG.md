@@ -3,6 +3,36 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.4.0
+
+### Changed (BREAKING) — curve hardening
+
+The `curve_cp` covenant was hardened: it now commits its **token reserve to
+covenant state** rather than reading it from a transaction input (a security
+fix — the reserve can no longer be spoofed by presenting a decoy inventory
+input). This changes the curve's on-chain layout and address, so the curve
+builders are updated to match. **Tokens deployed before this update
+(old-template) are not built correctly by these builders — pin `0.3.x` if you
+must interact with pre-hardening tokens.** Old-template tokens are being
+removed from the KRON registry as part of this rollout.
+
+- `curveCp.CpCurveState` gains a **required** `tokenReserve: bigint` field.
+  Supply the curve's current committed reserve (chain-derived from your
+  indexer) in `utxo.state`.
+- `curveCp.materializeCpScript` / `cpAddress` now require the `tokenReserve`
+  state field; the state region is 44 bytes (was 35).
+- `curveCp.buildCpSell` **signature changed** — now takes `sellerTokens` (an
+  array, enabling fractional sells that return the unsold remainder as change)
+  and a `traderPubkey`:
+  `buildCpSell(k, tpl, tokenTpl, utxo, sellerTokens, inventory, curveCovid,
+  traderPubkey, tokenIn, kasOut, presenceWitnessIdx, opts?)`.
+- `curveCp.buildCpBuy` gained `mergeTokens` + `presenceWitnessIdx` params
+  (before `opts`) so a buy can merge the buyer's existing holdings into one
+  output. Callers that passed `opts` positionally must move it to the new slot.
+
+The updated curve builders are byte-identical to the reference implementation
+verified against the on-chain (Kaspa txscript) VM.
+
 ## 0.3.0
 
 ### Added

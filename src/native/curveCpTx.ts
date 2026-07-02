@@ -1,18 +1,23 @@
 // Virtual-reserve constant-product curve builder — builds transactions against an ALREADY-DEPLOYED curve_cp
-// covenant instance (buy/sell/graduate). Curve state is just {graduated, tokenCovid} (realKas = the curve
-// UTXO value; tokenReserve = a C-owned inventory UTXO).
+// covenant instance (buy/sell/graduate). Curve state is {graduated, tokenCovid, tokenReserve} (realKas = the
+// curve UTXO value; tokenReserve = the committed token inventory, authoritative in state and kept in sync with
+// the C-owned inventory UTXO the curve also holds).
 //
-//   buy       — kasIn into the reserve, tokenOut from inventory to the buyer (presence-owned), fee split.
-//   sell      — tokenIn from the seller (presence) folds back into inventory, refund kasOut, fee split.
+//   buy       — kasIn into the reserve, tokenOut from inventory to the buyer (presence-owned), fee split. The
+//               bought tokens MERGE with any existing buyer holdings passed in `mergeTokens` into ONE output.
+//   sell      — the seller folds `tokenIn` from their piece(s) into inventory, refund kasOut; the unsold
+//               remainder returns as ONE presence-owned change output (fractional; no pre-split needed).
 //   graduate  — lock the curve, seed amm_pool_cp_v3 with the post-fee reserve + leftover inventory.
 //
-// State region (verify: silverc state_layout {start:1,len:35}): off 1: 0x01 <graduated:1> 0x20 <tokenCovid:32>.
+// State region (verify: silverc state_layout {start:1,len:44}): off 1: 0x01 <graduated:1> 0x20 <tokenCovid:32>
+//   0x08 <tokenReserve:8 LE>. tokenReserve is the AUTHORITATIVE token inventory committed to state (this is the
+//   reserve-spoof hardening: buy/sell/graduate read the reserve from state, not from an attacker-chosen input).
 // No top-level SDK import (only `import type`) — caller passes the loaded WASM namespace `k`. Callers need
 // the target curve's compiled script bytes (`CpTemplate.script`) — read them from your indexer's live UTXO
 // data (e.g. the `redeemScriptHex` field), not compiled locally; this package doesn't ship a covenant
 // compiler (see README).
 import type { Kaspa } from '../wasm/kaspa.types.js';
-import { SigScriptBuilder } from './sigscript.js';
+import { SigScriptBuilder, int8LE } from './sigscript.js';
 import {
   type Kcc20State,
   type Kcc20Template,
@@ -48,25 +53,28 @@ export type CpParams = {
   graduationFeeBps: bigint;
 };
 export type CpTemplate = { script: Uint8Array; stateStart: number; params: CpParams };
-export type CpCurveState = { graduated: boolean; tokenCovid: Uint8Array };
+export type CpCurveState = { graduated: boolean; tokenCovid: Uint8Array; tokenReserve: bigint };
 /** The live curve UTXO. `realKas` (sompi) = its value = KAS raised. */
 export type CpCurveUtxo = { transactionId: string; index: number; realKas: bigint; state: CpCurveState };
 /** The curve's C-owned token inventory UTXO (covid A). `amount` = tokens remaining. */
 export type CpInventoryUtxo = { transactionId: string; index: number; value: bigint; amount: bigint };
 
-// --- state splice (off 1, 35 bytes) ------------------------------------------------------------
+// --- state splice (off 1, 44 bytes: graduated + tokenCovid + tokenReserve) ---------------------
 export function materializeCpScript(tpl: CpTemplate, state: CpCurveState): Uint8Array {
   const s = tpl.stateStart;
   const t = tpl.script;
-  if (t[s] !== 0x01 || t[s + 2] !== 0x20) {
-    throw new Error('curve_cp template has an unexpected state layout (expected push1 graduated / push32 tokenCovid)');
+  if (t[s] !== 0x01 || t[s + 2] !== 0x20 || t[s + 35] !== 0x08) {
+    throw new Error('curve_cp template has an unexpected state layout (expected push1 graduated / push32 tokenCovid / push8 tokenReserve)');
   }
   if (state.tokenCovid.length !== 32) throw new Error('tokenCovid must be 32 bytes');
+  if (state.tokenReserve < 0n) throw new Error('tokenReserve must be non-negative');
   const out = t.slice();
   out[s] = 0x01;
   out[s + 1] = state.graduated ? 1 : 0;
   out[s + 2] = 0x20;
   out.set(state.tokenCovid, s + 3);
+  out[s + 35] = 0x08;
+  out.set(int8LE(state.tokenReserve), s + 36);
   return out;
 }
 
@@ -90,9 +98,12 @@ function buySig(k: K, redeem: Uint8Array, kasIn: bigint, tokenOut: bigint, inven
   pushKcc20StateScalar(b, buyerOut);
   return b.selector(SELECTOR.buy).redeem(redeem).drain();
 }
-function sellSig(k: K, redeem: Uint8Array, tokenIn: bigint, kasOut: bigint, inventoryOut: Kcc20State): string {
+// single-token sell: pushes traderChangeOut too (even on a full sell — the covenant only validates it when a
+// 2nd covid-A output exists; otherwise it's an ignored placeholder).
+function sellSig(k: K, redeem: Uint8Array, tokenIn: bigint, kasOut: bigint, inventoryOut: Kcc20State, traderChangeOut: Kcc20State): string {
   const b = new SigScriptBuilder(k).int(tokenIn).int(kasOut);
   pushKcc20StateScalar(b, inventoryOut);
+  pushKcc20StateScalar(b, traderChangeOut);
   return b.selector(SELECTOR.sell).redeem(redeem).drain();
 }
 // graduate: the PoolState struct has five fields (kasReserve, tokenReserve, tokenCovid, totalShares, lpCovid)
@@ -103,7 +114,9 @@ function graduateSigV2(k: K, redeem: Uint8Array, pool: { kasReserve: bigint; tok
   return b.selector(SELECTOR.graduate).redeem(redeem).drain();
 }
 
-// --- buy: kasIn into reserve, tokenOut from inventory to buyer (presence-owned) -----------------
+// --- buy (MERGE): kasIn into reserve, tokenOut from inventory; the bought tokens MERGE with any EXISTING holdings
+// the buyer passes in `mergeTokens` into ONE presence-owned output — so a buy never fragments. `presenceWitnessIdx`
+// = the tx input index of a co-present P2PK input at the buyer's address (only needed when merging).
 export function buildCpBuy(
   k: K,
   tpl: CpTemplate,
@@ -114,11 +127,14 @@ export function buildCpBuy(
   buyerPubkey: Uint8Array,
   kasIn: bigint,
   tokenOut: bigint,
+  mergeTokens: { transactionId: string; index: number; value: bigint; state: Kcc20State }[] = [],
+  presenceWitnessIdx = 0,
   opts: { tokenDust?: bigint } = {},
 ): CovenantSpend {
   if (utxo.state.graduated) throw new Error('curve has graduated — buys are locked');
   if (kasIn <= 0n || kasIn % SCALE !== 0n) throw new Error('kasIn must be a positive multiple of SCALE (0.01 KAS)');
   if (tokenOut <= 0n || tokenOut >= inventory.amount) throw new Error('invalid tokenOut');
+  if (inventory.amount !== utxo.state.tokenReserve) throw new Error('inventory.amount must equal the curve\'s committed tokenReserve');
   const dust = opts.tokenDust ?? 1000n;
   const newKas = utxo.realKas + kasIn;
   // Overbuy allowed: a buy may exceed graduationKas (excess seeds the LP at graduation). Only MAX_KAS caps it.
@@ -126,19 +142,27 @@ export function buildCpBuy(
   const newToken = inventory.amount - tokenOut;
   const creatorFee = (kasIn * tpl.params.creatorFeeBps) / 10000n;
   const platformFee = (kasIn * tpl.params.platformFeeBps) / 10000n;
+  const mergeSum = mergeTokens.reduce((s, t) => s + t.state.amount, 0n);
 
   const inventoryOut = covenantIdOwned(curveCovid, newToken, false);
-  const buyerOut = addressPresenceOwned(buyerPubkey, tokenOut);
+  const buyerOut = addressPresenceOwned(buyerPubkey, tokenOut + mergeSum); // bought + merged existing → ONE UTXO
   const curRedeem = materializeCpScript(tpl, utxo.state);
-  const newCurveRedeem = materializeCpScript(tpl, { graduated: false, tokenCovid: utxo.state.tokenCovid });
+  const newCurveRedeem = materializeCpScript(tpl, { graduated: false, tokenCovid: utxo.state.tokenCovid, tokenReserve: newToken });
   const invRedeem = materializeKcc20Script(tokenTpl, covenantIdOwned(curveCovid, inventory.amount, false));
   const invOutRedeem = materializeKcc20Script(tokenTpl, inventoryOut);
   const buyerRedeem = materializeKcc20Script(tokenTpl, buyerOut);
+  // covid-A inputs in tx order: inventory (witness = curve input 0), then each merged existing token (presence → P2PK).
+  const witnesses = [0, ...mergeTokens.map(() => presenceWitnessIdx)];
+  const newStates = [inventoryOut, buyerOut];
 
   const inputs: CovInput[] = [
     { transactionId: utxo.transactionId, index: utxo.index, value: utxo.realKas, scriptPublicKey: cpSpk(k, curRedeem), signatureScript: buySig(k, curRedeem, kasIn, tokenOut, inventoryOut, buyerOut), redeem: curRedeem, role: 'curve' },
-    // inventory (covid A, C-owned) spent via kcc20 transfer; the single covid-A input is authorized by the curve (input 0)
-    { transactionId: inventory.transactionId, index: inventory.index, value: inventory.value, scriptPublicKey: kcc20Spk(k, invRedeem), signatureScript: transferSigScript(k, invRedeem, [inventoryOut, buyerOut], [0]), redeem: invRedeem, role: 'inventory' },
+    // inventory (covid A, C-owned) spent via kcc20 transfer; the C-owned input is authorized by the curve (input 0)
+    { transactionId: inventory.transactionId, index: inventory.index, value: inventory.value, scriptPublicKey: kcc20Spk(k, invRedeem), signatureScript: transferSigScript(k, invRedeem, newStates, witnesses), redeem: invRedeem, role: 'inventory' },
+    ...mergeTokens.map((mt) => {
+      const r = materializeKcc20Script(tokenTpl, mt.state);
+      return { transactionId: mt.transactionId, index: mt.index, value: mt.value, scriptPublicKey: kcc20Spk(k, r), signatureScript: transferSigScript(k, r, newStates, witnesses), redeem: r, role: 'buyerToken' as const };
+    }),
   ];
   const outputs: CovOutput[] = [
     { value: newKas, scriptPublicKey: cpSpk(k, newCurveRedeem), role: 'curve' },
@@ -147,48 +171,59 @@ export function buildCpBuy(
     { value: padFee(creatorFee), scriptPublicKey: p2pkSpk(k, tpl.params.creatorFeeOwner), role: 'creatorFee' },
     { value: padFee(platformFee), scriptPublicKey: p2pkSpk(k, tpl.params.platformFeeOwner), role: 'platformFee' },
   ];
-  return { kind: 'buy', inputs, outputs, economics: { kasIn, tokenOut, creatorFee, platformFee, newRealKas: newKas, newTokenReserve: newToken }, covids: { tokenCovid: hexOf(utxo.state.tokenCovid) } };
+  return { kind: 'buy', inputs, outputs, economics: { kasIn, tokenOut, creatorFee, platformFee, newRealKas: newKas, newTokenReserve: newToken, merged: mergeSum }, covids: { tokenCovid: hexOf(utxo.state.tokenCovid) } };
 }
 
-// --- sell: seller's tokens (presence) fold into inventory, refund kasOut --------------------------
-// `presenceWitnessIdx` = the tx input index of a co-present P2PK input at the seller's address (a funding
-// input the wallet signs). The assembly puts covenant inputs [curve,seller,inventory] first, so the flow
-// passes covInputs.length (3) and ensures funding input #0 is the seller's P2PK.
+// --- sell (single-token, FRACTIONAL): fold `tokenIn` from the seller's piece(s), refund kasOut, return the
+// unsold remainder as ONE presence-owned change output (LAST) — no pre-split. Inputs: [curve(0), inventory(1),
+// seller1(2)…sellerN]. `presenceWitnessIdx` = the tx index of a co-present P2PK input at the seller's address the
+// wallet signs (also the presence witness that authorizes the address-owned seller tokens). covid-A outputs:
+// [inventory(0), OPTIONAL change(1)]. kcc20 conservation forces change == Σ(seller inputs) − tokenIn.
 export function buildCpSell(
   k: K,
   tpl: CpTemplate,
   tokenTpl: Kcc20Template,
   utxo: CpCurveUtxo,
-  sellerToken: { transactionId: string; index: number; value: bigint; state: Kcc20State },
+  sellerTokens: { transactionId: string; index: number; value: bigint; state: Kcc20State }[],
   inventory: CpInventoryUtxo,
   curveCovid: Uint8Array,
+  traderPubkey: Uint8Array,
   tokenIn: bigint,
   kasOut: bigint,
   presenceWitnessIdx: number,
   opts: { tokenDust?: bigint } = {},
 ): CovenantSpend {
   if (utxo.state.graduated) throw new Error('curve has graduated — sells are locked');
-  if (tokenIn <= 0n || sellerToken.state.amount !== tokenIn) throw new Error('seller token amount must equal tokenIn (full-UTXO sell)');
+  if (sellerTokens.length < 1) throw new Error('need at least one seller token');
+  if (tokenIn <= 0n) throw new Error('tokenIn must be positive');
   if (kasOut <= 0n || kasOut % SCALE !== 0n || kasOut > utxo.realKas) throw new Error('invalid kasOut');
+  if (inventory.amount !== utxo.state.tokenReserve) throw new Error('inventory.amount must equal the curve\'s committed tokenReserve');
   const dust = opts.tokenDust ?? 1000n;
+  const sellerIn = sellerTokens.reduce((s, t) => s + t.state.amount, 0n);
+  const change = sellerIn - tokenIn;  // the unsold remainder (kcc20 conservation pins it on-chain)
+  if (change < 0n) throw new Error('seller inputs are less than the sell amount');
+  const hasChange = change > 0n;
   const newToken = inventory.amount + tokenIn;
   const creatorFee = (kasOut * tpl.params.creatorFeeBps) / 10000n;
   const platformFee = (kasOut * tpl.params.platformFeeBps) / 10000n;
 
   const inventoryOut = covenantIdOwned(curveCovid, newToken, false);
+  const traderChangeOut = addressPresenceOwned(traderPubkey, hasChange ? change : 1n); // dummy(1) on a full sell — covenant ignores it
   const curRedeem = materializeCpScript(tpl, utxo.state);
-  const newCurveRedeem = materializeCpScript(tpl, { graduated: false, tokenCovid: utxo.state.tokenCovid });
-  const sellerRedeem = materializeKcc20Script(tokenTpl, sellerToken.state);
+  const newCurveRedeem = materializeCpScript(tpl, { graduated: false, tokenCovid: utxo.state.tokenCovid, tokenReserve: newToken });
   const invRedeem = materializeKcc20Script(tokenTpl, covenantIdOwned(curveCovid, inventory.amount, false));
   const invOutRedeem = materializeKcc20Script(tokenTpl, inventoryOut);
-  // covid-A inputs in tx order: seller (input 1) then inventory (input 2) → witnesses [sellerAuth, curve]
-  const witnesses = [presenceWitnessIdx, 0];
-  const newStates = [inventoryOut];
+  // covid-A inputs in tx order: inventory (witness = curve input 0), then each seller (presence → its P2PK witness).
+  const witnesses = [0, ...sellerTokens.map(() => presenceWitnessIdx)];
+  const newStates = hasChange ? [inventoryOut, traderChangeOut] : [inventoryOut];
 
   const inputs: CovInput[] = [
-    { transactionId: utxo.transactionId, index: utxo.index, value: utxo.realKas, scriptPublicKey: cpSpk(k, curRedeem), signatureScript: sellSig(k, curRedeem, tokenIn, kasOut, inventoryOut), redeem: curRedeem, role: 'curve' },
-    { transactionId: sellerToken.transactionId, index: sellerToken.index, value: sellerToken.value, scriptPublicKey: kcc20Spk(k, sellerRedeem), signatureScript: transferSigScript(k, sellerRedeem, newStates, witnesses), redeem: sellerRedeem, role: 'sellerToken' },
+    { transactionId: utxo.transactionId, index: utxo.index, value: utxo.realKas, scriptPublicKey: cpSpk(k, curRedeem), signatureScript: sellSig(k, curRedeem, tokenIn, kasOut, inventoryOut, traderChangeOut), redeem: curRedeem, role: 'curve' },
     { transactionId: inventory.transactionId, index: inventory.index, value: inventory.value, scriptPublicKey: kcc20Spk(k, invRedeem), signatureScript: transferSigScript(k, invRedeem, newStates, witnesses), redeem: invRedeem, role: 'inventory' },
+    ...sellerTokens.map((st) => {
+      const r = materializeKcc20Script(tokenTpl, st.state);
+      return { transactionId: st.transactionId, index: st.index, value: st.value, scriptPublicKey: kcc20Spk(k, r), signatureScript: transferSigScript(k, r, newStates, witnesses), redeem: r, role: 'sellerToken' as const };
+    }),
   ];
   const outputs: CovOutput[] = [
     { value: utxo.realKas - kasOut, scriptPublicKey: cpSpk(k, newCurveRedeem), role: 'curve' },
@@ -196,7 +231,8 @@ export function buildCpSell(
     { value: padFee(creatorFee), scriptPublicKey: p2pkSpk(k, tpl.params.creatorFeeOwner), role: 'creatorFee' },
     { value: padFee(platformFee), scriptPublicKey: p2pkSpk(k, tpl.params.platformFeeOwner), role: 'platformFee' },
   ];
-  return { kind: 'sell', inputs, outputs, economics: { tokenIn, kasOut, creatorFee, platformFee, newRealKas: utxo.realKas - kasOut, newTokenReserve: newToken }, covids: { tokenCovid: hexOf(utxo.state.tokenCovid) } };
+  if (hasChange) outputs.push({ value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, traderChangeOut)), role: 'seller' });
+  return { kind: 'sell', inputs, outputs, economics: { tokenIn, kasOut, change, creatorFee, platformFee, newRealKas: utxo.realKas - kasOut, newTokenReserve: newToken }, covids: { tokenCovid: hexOf(utxo.state.tokenCovid) } };
 }
 
 // --- graduate: lock curve, seed the CP pool (amm_pool_cp_v3) with the 5-field PoolState (locked floor, L unbound) ---
@@ -218,6 +254,7 @@ export function buildCpGraduate(
   if (utxo.state.graduated) throw new Error('already graduated');
   if (utxo.realKas < tpl.params.graduationKas) throw new Error('reserve has not reached the graduation target');
   if (poolLockedShares < 1n) throw new Error('poolLockedShares must be >= 1');
+  if (inventory.amount !== utxo.state.tokenReserve) throw new Error('inventory.amount must equal the curve\'s committed tokenReserve');
   const lockedValue = opts.lockedCurveValue ?? 1000n;
   const dust = opts.tokenDust ?? 1000n;
   // poolKas ≈ (1 − gradFeeBps) of the reserve, floored to a whole SCALE step; platform takes the remainder.
@@ -240,7 +277,8 @@ export function buildCpGraduate(
   const poolTokenRedeem = materializeKcc20Script(tokenTpl, poolTokens);
 
   const curRedeem = materializeCpScript(tpl, utxo.state);
-  const lockedRedeem = materializeCpScript(tpl, { graduated: true, tokenCovid: A });
+  // graduated husk carries the reserve unchanged (== inventory.amount == the committed reserve at lock time).
+  const lockedRedeem = materializeCpScript(tpl, { graduated: true, tokenCovid: A, tokenReserve: inventory.amount });
   const invRedeem = materializeKcc20Script(tokenTpl, covenantIdOwned(curveCovid, inventory.amount, false));
 
   const inputs: CovInput[] = [
