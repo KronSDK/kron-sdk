@@ -12,12 +12,35 @@ export type CpCurveParamsRecord = {
   dexLpFeeBps?: number; poolLockedShares?: number; vestingCovid?: string;
 };
 
+/** Covenant version pin (template pinning, KRON ROADMAP 3.5) — stamped by the registry SERVER at
+ *  registration, never client-set. `schema` = blake2b-256 over the covenant `.sil` source set the token was
+ *  deployed under (the sources live at `covenants/versions/<schema[0..12]>/` in the kron repo); `silverc` =
+ *  the pinned compiler commit. A consumer re-deriving the token's covenant templates/addresses from
+ *  `curveParams` MUST compile the PINNED source set — compiling newer sources yields different bytes and
+ *  wrong addresses. Absent/null = a pre-pinning legacy record (current sources at the time). */
+export type TemplateVersionRecord = { schema: string; silverc?: string | null };
+
+/** Optional dev-allocation vesting record (curve_cp.initVested + vesting.sil) — schedule in tx.locktime units. */
+export type CpVestingRecord = {
+  vestingCovid: string; total: number; startScore: number; durationScore: number;
+  genesisTxid: string; outIndex: number;
+};
+
 export type RegistryToken = {
   tick: string; name: string; creator: string; txid: string; dec: number; max: string;
   description?: string; image?: string;
   links?: { website?: string; x?: string; telegram?: string };
-  cp: { curveParams: CpCurveParamsRecord; tokenCovid?: string; curveCovid?: string; poolCovid?: string; genesisTxid?: string };
+  cp: {
+    curveParams: CpCurveParamsRecord;
+    templateVersion?: TemplateVersionRecord | null; // covenant version pin (server-stamped)
+    tokenCovid?: string; curveCovid?: string; poolCovid?: string; genesisTxid?: string;
+    initialInventory?: number; devAmount?: number;
+    vesting?: CpVestingRecord | null;
+  };
+  creatorPubkey?: string;
+  graduated?: boolean;
   chainVerified?: boolean;
+  createdAt?: string;
 };
 
 /** One entry of the public token list (GET /api/registry/tokenlist). tokenlists.org-shaped: the EVM-core
@@ -37,6 +60,9 @@ export type TokenListEntry = {
     creator: string | null;
     creatorPubkey: string | null;
     curveParams: CpCurveParamsRecord | null;
+    /** Covenant version pin — with `curveParams`, what a covenant-aware auditor needs to re-derive the
+     *  curve P2SH (compile the PINNED source set, not the newest). Null = pre-pinning legacy entry. */
+    templateVersion: TemplateVersionRecord | null;
     graduated: boolean;
     chainVerified: boolean;
   };

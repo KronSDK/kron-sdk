@@ -13,6 +13,13 @@
 // (node RPC, a proxy, a fixture). NOTE: this does not re-derive the curve P2SH from params — the SDK has no
 // covenant compiler. For a full cryptographic re-derivation, feed the init tx's outpoint + authorized
 // outputs to `genesis.genesisCovenantId` (see src/native/genesis.ts).
+//
+// TEMPLATE PINNING (KRON ROADMAP 3.5): entries carry `extensions.templateVersion` — the covenant version the
+// token was deployed under. An external auditor recompiling the covenant templates from
+// `extensions.curveParams` must compile THAT version's `.sil` source set (archived at
+// `covenants/versions/<schema[0..12]>/` in the kron repo), not the newest sources — a later covenant change
+// legitimately produces different bytes for new tokens. THIS verifier is version-independent (it checks the
+// consensus-assigned covenantId against the genesis tx), so it needs no source set at all.
 import type { TokenListEntry } from '../client/registryClient.js';
 
 /** Minimal shape of a fetched Kaspa transaction — only what the verifier reads. `covenant_id` is the

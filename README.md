@@ -4,7 +4,7 @@
 — a bonding-curve launchpad + AMM DEX — from any JS/TS environment.** Browser or Node. No custody, ever:
 this package only *builds* transactions; a wallet (yours, or your user's) signs them.
 
-> **Status: v0.6.0, testnet (TN10).** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.6.1, testnet (TN10).** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract and how to
 > adapt it to a specific wallet's injected provider.
@@ -42,7 +42,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.6.0       # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.6.1       # or pin an exact version for reproducible builds
 ```
 
 The package follows semver. **0.6.0 is a required upgrade for anyone building curve/pool/LP/vesting
@@ -118,6 +118,13 @@ for (const entry of list.tokens) {
 verifier can't re-derive the covenant script from params (this package has no compiler); the
 covenant-id-on-genesis check is the achievable, sufficient anti-spoof proof. Full schema:
 [`docs/INTEGRATION.md`](docs/INTEGRATION.md).
+
+`extensions.templateVersion` (0.6.1+) is the token's **covenant version pin** `{ schema, silverc }` —
+KRON pins each token to the covenant source set it was deployed under (template pinning), so future
+covenant upgrades can't strand deployed tokens. An auditor recompiling the covenant from
+`extensions.curveParams` must compile **that** version's sources (archived at
+`covenants/versions/<schema[0..12]>/` in the kron repo), not the newest ones. `null` = pre-pinning legacy
+entry. The on-chain verifier above is version-independent and needs none of this.
 
 ## What's in the box
 

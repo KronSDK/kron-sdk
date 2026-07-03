@@ -3,6 +3,27 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.6.1
+
+### Added — covenant template-version pin surfaced in the types (KRON ROADMAP 3.5)
+
+KRON now pins every token to the covenant source-set version it was deployed under, so future covenant
+changes can't strand deployed tokens. The registry stamps `cp.templateVersion = { schema, silverc }`
+server-side (`schema` = blake2b-256 of the `.sil` source set, archived at `covenants/versions/<schema12>/`
+in the kron repo; `silverc` = the pinned compiler commit), and the public token list exposes it at
+`extensions.templateVersion`.
+
+- New `TemplateVersionRecord` type; `RegistryToken.cp.templateVersion` and
+  `TokenListEntry.extensions.templateVersion` are now typed (both nullable — `null` marks a pre-pinning
+  legacy record).
+- `RegistryToken` also gained the rest of the live record's `cp` fields (`initialInventory`, `devAmount`,
+  `vesting` via the new `CpVestingRecord`) plus top-level `creatorPubkey` / `graduated` / `createdAt`.
+- Docs: an auditor re-deriving covenant templates/addresses from `curveParams` must compile the PINNED
+  source set — not the newest sources. `verify.verifyTokenListEntry` itself is version-independent
+  (it checks the consensus-assigned covenantId against the genesis tx) and is unchanged.
+
+No runtime behavior changes — purely additive types + documentation.
+
 ## 0.6.0
 
 ### Fixed — trade/LP/vesting builders produced transactions the chain always rejects

@@ -12,7 +12,9 @@ const entry = (over: Partial<TokenListEntry> = {}): TokenListEntry => ({
   symbol: 'GHOST', name: 'Ghost', decimals: 0,
   extensions: {
     curveCovenantId: COVID_C, poolCovenantId: null, genesisTxid: TXID,
-    creator: null, creatorPubkey: null, curveParams: null, graduated: false, chainVerified: true,
+    creator: null, creatorPubkey: null, curveParams: null,
+    templateVersion: { schema: '39'.repeat(32), silverc: '2c'.repeat(20) }, // covenant version pin (server-stamped)
+    graduated: false, chainVerified: true,
   },
   ...over,
 });
@@ -53,6 +55,13 @@ describe('verifyTokenListEntry', () => {
   it('tolerates a tx with no outputs array', async () => {
     const r = await verifyTokenListEntry(entry(), async () => ({}) as any);
     expect(r.ok).toBe(false);
+  });
+
+  it('is version-independent: a pre-pinning legacy entry (templateVersion null) still verifies', async () => {
+    const e = entry(); e.extensions.templateVersion = null;
+    const tx = { outputs: [{ covenant_id: COVID_A }] };
+    const r = await verifyTokenListEntry(e, async () => tx);
+    expect(r.ok).toBe(true);
   });
 });
 
