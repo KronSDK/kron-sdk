@@ -4,16 +4,40 @@
 // the covenant-required OUTPUTS (continuation, minted/moved token balances, fee). This module bolts on the
 // trader's funding inputs + change to make a complete Kaspa transaction.
 //
+// Covenant transactions are Toccata/KIP-20 **version-1** transactions:
+//   • covenant outputs must carry a `CovenantBinding(authorizingInput, covenantId)` — without it the output
+//     never enters the covenant-id group, so in-covenant checks like `OpCovOutputCount(id)` see 0 outputs
+//     and the spend fails on-chain with "script ran, but verification failed" (a v0 output CANNOT carry a
+//     binding, so a v0 tx can never satisfy a covenant that validates its outputs);
+//   • each input carries a `computeBudget` (v1 replaces sigOpCount as the execution-metering commitment) —
+//     a P2PK funding input needs ~10, a kcc20 transfer input ~500, a curve/pool input ~2000.
+// Set `binding` on each covenant `CovOutput` (the kcc20 builders do this when given the token covenant id);
+// `assembleNativeTx` attaches the WASM `CovenantBinding` and role-based compute budgets.
+//
 // Production signing path: the app builds the tx here, the wallet signs only the trader's P2PK funding
 // inputs via its signPskt-equivalent bridge (see ../wallet/types.ts), and the app broadcasts — covenant
 // inputs never need a wallet signature. `toPsktJson` shapes the tx + the funding-input indices for that
-// bridge.
+// bridge. (The sighash commits to output covenant bindings, so bindings must be attached BEFORE signing.)
 //
 // No top-level SDK import (only `import type`) — caller passes the loaded WASM namespace `k`.
 import type { Kaspa } from '../wasm/kaspa.types.js';
 
 type K = Kaspa;
 type Spk = any;
+
+/** Covenant txs are KIP-20 v1 transactions (covenant outputs require tx.version >= 1). */
+export const TX_VERSION = 1;
+/** Per-input compute budget (v1): a P2PK funding input ≈ one sig op. */
+export const FUNDING_COMPUTE = 10;
+/** Per-input compute budget (v1): a kcc20 `transfer` input (token balance / inventory / seller piece). */
+export const TOKEN_COMPUTE = 500;
+/** Per-input compute budget (v1): a curve_cp / amm_pool_cp input (the large redeem scripts). */
+export const COVENANT_COMPUTE = 2000;
+/** Covenant output min value (KIP-9 storage mass) — the conventional token-UTXO dust, 0.5 KAS. */
+export const COVENANT_DUST = 50_000_000n;
+
+/** A covenant output's KIP-20 lineage: which covenant id it continues and which input authorizes it. */
+export type CovBinding = { covid: string; authorizingInput: number };
 
 /** A covenant UTXO being spent, already carrying its signature script (no wallet signature needed). */
 export type CovInput = {
@@ -27,14 +51,16 @@ export type CovInput = {
   redeem: Uint8Array;
   /** what this input is, for assembly/debugging: 'curve' | 'minterBranch' | 'burn' | 'pool' | 'poolToken'. */
   role: string;
+  /** v1 compute budget override; defaults by role (curve/pool → COVENANT_COMPUTE, else TOKEN_COMPUTE). */
+  computeBudget?: number;
 };
 
-/** A covenant-required output (value + scriptPublicKey). */
-export type CovOutput = { value: bigint; scriptPublicKey: Spk; role: string };
+/** A covenant-required output (value + scriptPublicKey [+ covenant binding]). */
+export type CovOutput = { value: bigint; scriptPublicKey: Spk; role: string; binding?: CovBinding };
 
 /** A complete covenant action: the inputs it spends + the outputs it must create + computed economics. */
 export type CovenantSpend = {
-  kind: 'init' | 'initVested' | 'buy' | 'sell' | 'graduate' | 'swapKasForToken' | 'swapTokenForKas' | 'addLiquidity' | 'removeLiquidity' | 'bindLp' | 'claim' | 'claimFinal';
+  kind: 'init' | 'initVested' | 'buy' | 'sell' | 'transfer' | 'graduate' | 'swapKasForToken' | 'swapTokenForKas' | 'addLiquidity' | 'removeLiquidity' | 'bindLp' | 'claim' | 'claimFinal';
   inputs: CovInput[];
   outputs: CovOutput[];
   economics: Record<string, bigint>;
@@ -47,6 +73,8 @@ export type FundingEntry = any;
 
 const SUBNET_ZERO = '0000000000000000000000000000000000000000';
 
+const budgetForRole = (role: string): number => (role === 'curve' || role === 'pool' ? COVENANT_COMPUTE : TOKEN_COMPUTE);
+
 export type AssembledNativeTx = {
   transaction: any;
   /** indices of inputs the trader/wallet must sign (the covenant inputs come first and are pre-scripted). */
@@ -57,10 +85,12 @@ export type AssembledNativeTx = {
 };
 
 /**
- * Assemble a complete tx: the spend's covenant inputs (pre-scripted) + the trader's funding inputs + a
- * change output. `networkFee` is caller-provided (derive from the node; KIP-9 storage mass depends on
- * output values, so the node confirms the exact fee/change at broadcast). Covenant inputs carry sigOpCount
- * 0 (no checkSig on the accept path used here); funding inputs are signed via signFundingInputs.
+ * Assemble a complete v1 covenant tx: the spend's covenant inputs (pre-scripted) + the trader's funding
+ * inputs + a change output. Covenant outputs whose `binding` is set carry the KIP-20 `CovenantBinding`
+ * (REQUIRED for any output the covenant validates — see the module header). `networkFee` is
+ * caller-provided; size it with `estimateNativeFee` (v1 fees must cover the per-input compute budget, so a
+ * flat legacy fee is usually too low). Covenant inputs default to a role-based compute budget; funding
+ * inputs are signed via signFundingInputs (or the signPskt bridge).
  */
 export function assembleNativeTx(
   k: K,
@@ -76,6 +106,7 @@ export function assembleNativeTx(
         signatureScript: ci.signatureScript,
         sequence: 0n,
         sigOpCount: 0,
+        computeBudget: ci.computeBudget ?? budgetForRole(ci.role),
         utxo: {
           outpoint: { transactionId: ci.transactionId, index: ci.index },
           amount: ci.value,
@@ -86,7 +117,7 @@ export function assembleNativeTx(
       }),
   );
   const fundingInputs = fundingEntries.map(
-    (e) => new kk.TransactionInput({ previousOutpoint: e.outpoint, signatureScript: '', sequence: 0n, sigOpCount: 1, utxo: e }),
+    (e) => new kk.TransactionInput({ previousOutpoint: e.outpoint, signatureScript: '', sequence: 0n, sigOpCount: 0, computeBudget: FUNDING_COMPUTE, utxo: e }),
   );
 
   const covInValue = spend.inputs.reduce((s, ci) => s + ci.value, 0n);
@@ -96,11 +127,15 @@ export function assembleNativeTx(
   const change = totalIn - covenantOut - networkFee;
   if (change < 0n) throw new Error(`insufficient funding: need ${covenantOut + networkFee} sompi, have ${totalIn}`);
 
-  const outputs = spend.outputs.map((o) => new kk.TransactionOutput(o.value, o.scriptPublicKey));
+  const outputs = spend.outputs.map((o) =>
+    o.binding
+      ? new kk.TransactionOutput(o.value, o.scriptPublicKey, new kk.CovenantBinding(o.binding.authorizingInput, new kk.Hash(o.binding.covid)))
+      : new kk.TransactionOutput(o.value, o.scriptPublicKey),
+  );
   outputs.push(new kk.TransactionOutput(change, kk.payToAddressScript(changeAddress)));
 
   const transaction = new kk.Transaction({
-    version: 0,
+    version: TX_VERSION,
     inputs: [...covInputs, ...fundingInputs],
     outputs,
     lockTime: 0n,
@@ -115,6 +150,32 @@ export function assembleNativeTx(
     covenantOut,
     change,
   };
+}
+
+/**
+ * Size `networkFee` for an assembled v1 tx: byte/storage mass (via the WASM mass calculator, with
+ * placeholder signatures on the funding inputs so byte mass is realistic) + the per-input compute budget
+ * the calculator omits (grams = budget × 100), at `feeRateSompiPerGram` (use the node's feerate estimate;
+ * min-relay on TN10 has been ~100 sompi/gram), with a 1.5× over-cover and a 10_000-sompi floor. Assemble
+ * with a guess (e.g. 10_000n), call this, then re-assemble with the returned fee.
+ */
+export function estimateNativeFee(k: K, networkId: string, asm: AssembledNativeTx, feeRateSompiPerGram: number): bigint {
+  const kk = k as any;
+  const tx = asm.transaction;
+  const ins = tx.inputs;
+  const saved = asm.fundingInputIndexes.map((i: number) => ins[i].signatureScript);
+  for (const i of asm.fundingInputIndexes) ins[i].signatureScript = '00'.repeat(66); // placeholder sig → realistic byte mass
+  tx.inputs = ins;
+  let byteMass = 2000n;
+  try { byteMass = BigInt(kk.calculateTransactionMass(networkId, tx)); } catch { /* fall back */ }
+  const ins2 = tx.inputs;
+  asm.fundingInputIndexes.forEach((i: number, j: number) => (ins2[i].signatureScript = saved[j]));
+  tx.inputs = ins2;
+  let computeGrams = 0n;
+  for (const inp of tx.inputs) computeGrams += BigInt(inp.computeBudget || 0) * 100n;
+  const rate = BigInt(Math.max(Math.ceil(feeRateSompiPerGram), 1));
+  const fee = ((byteMass + computeGrams) * rate * 3n) / 2n;
+  return fee > 10000n ? fee : 10000n;
 }
 
 /** Sign the trader's funding inputs (P2PK) in place; covenant inputs are left untouched (pre-scripted). */

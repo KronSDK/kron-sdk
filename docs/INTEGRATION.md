@@ -295,10 +295,33 @@ covenant compiler or the `.sil` sources, and doesn't build the deploy/genesis tr
 covenant authorizes each input by its ownership mode (pubkey sig / P2SH / covenant id / address-presence),
 validates each output's state, and enforces conservation on L1.
 
-To send: reference the sender's token UTXOs (from `/address/{address}/utxos`), build a `transfer` that
-outputs `[recipientAmount, change]` with the recipient owner identity on the first output, have the wallet
-authorize it, submit. Reference builder: `transferSigScript` in `kron.kcc20`; `kron.curveCp.buildSplitToken`
-shows the conserving split/transfer shape end to end.
+To send: reference the sender's token UTXOs (from `/address/{address}/utxos`), decode each UTXO's
+`redeemScriptHex` with `kron.kcc20.decodeKcc20Redeem` (→ the splice template + current state), build the
+spend with `kron.kcc20.buildKcc20Send` (outputs `[recipientAmount, change]`, presence-authorized by the
+sender's co-present P2PK funding input), assemble + sign + submit.
+**Runnable end-to-end example: [`scripts/example-kcc20-send.mjs`](../scripts/example-kcc20-send.mjs).**
+Lower-level pieces if you need custom shapes: `transferSigScript` (the raw signature script),
+`kron.curveCp.buildSplitToken` / `buildConsolidate` (same-owner split/merge).
+
+### Covenant transactions are v1 (bindings + compute budgets) — REQUIRED
+
+A covenant spend only validates on-chain as a KIP-20 **version-1** transaction:
+
+- **`CovenantBinding` on every covenant output.** Each token/curve/pool output must declare
+  `{ authorizingInput, covenantId }` to enter the covenant-id group. Without it, the covenant's
+  `OpCovOutputCount(id)` sees **zero** outputs and the spend is rejected with
+  `script ran, but verification failed` — the single most common integration failure. The builders set
+  the binding when you pass the covenant id (e.g. `buildKcc20Send`'s `tokenCovid` — the `covenantId`
+  from `indexer.token(tick)`); for custom spends set `spend.outputs[i].binding = { covid, authorizingInput }`
+  before assembling.
+- **`computeBudget` on every input** (v1 replaces `sigOpCount`): P2PK funding ≈ 10, a kcc20 transfer
+  input ≈ 500, a curve/pool input ≈ 2000. `assembleNativeTx` applies role-based defaults.
+- **Fees must cover the compute budget** (grams = budget × 100) on top of byte/storage mass — a flat
+  legacy fee (e.g. 5000 sompi) is too low. Size with `kron.spend.estimateNativeFee`.
+- **Covenant outputs carry ≥ 0.5 KAS** (`kron.spend.COVENANT_DUST`) for KIP-9 storage mass.
+
+`assembleNativeTx` handles all of this (SDK ≥ 0.5.0; earlier versions built v0 transactions without
+bindings, which the chain always rejects — upgrade).
 
 ### Signing: the wallet bridge
 
@@ -307,6 +330,9 @@ const asm = kron.spend.assembleNativeTx(k, { spend, fundingEntries, changeAddres
 const pskt = kron.spend.toPsktJson(asm);
 const signed = await wallet.signPskt(pskt.txJsonString, pskt.signInputs); // any WalletAdapter implementation
 ```
+
+(The sighash commits to the output covenant bindings, so bindings are attached at assembly, before
+signing — a signed tx can't be re-bound.)
 
 See [`docs/WALLETS.md`](WALLETS.md) for the `WalletAdapter` contract and a generic reference implementation
 to adapt to a specific wallet's injected provider. For a backend bot holding its own key (no extension
@@ -398,9 +424,14 @@ to avoid building txs the chain will reject — you're free to choose different 
 
 ### Wallet — send tokens (the "Send" button)
 
-1. `indexer.tokenUtxos(tick, address)` → sender's token UTXOs.
-2. Build a `kcc20.transfer` outputting `[recipientAmount, change]` (builder: `kron.kcc20.transferSigScript`).
-3. Wallet signs (presence input at the sender's address); submit to the node.
+1. `indexer.token(tick)` → `covenantId` (the outputs' binding target); `indexer.tokenUtxos(tick, address)`
+   → sender's token UTXOs (`redeemScriptHex` each).
+2. `kron.kcc20.decodeKcc20Redeem(redeem)` → template + state; `kron.kcc20.buildKcc20Send(...)` →
+   the `[recipientAmount, change]` spend with covenant bindings.
+3. `assembleNativeTx` (v1 + budgets) + `estimateNativeFee`; wallet signs the funding inputs (the
+   presence input at the sender's address); submit to the node.
+
+Complete runnable version: [`scripts/example-kcc20-send.mjs`](../scripts/example-kcc20-send.mjs).
 
 ### TG bot — `/price GHOST`
 

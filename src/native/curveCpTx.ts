@@ -299,11 +299,13 @@ export function buildCpGraduate(
  * a plain conserving kcc20 transfer authorized by a co-present P2PK input at `presenceWitnessIdx`. Lets a
  * holder sell an ARBITRARY amount on covenants that require full-UTXO sells (curve/pool): split, then sell the
  * `sellAmount` piece. No curve/pool involved — just the token covenant.
+ * Pass `opts.tokenCovid` (the token's covenant id, hex — `covenantId` from the indexer) so both outputs carry
+ * the KIP-20 covenant binding the chain requires; without it the assembled tx fails on-chain.
  */
 export function buildSplitToken(
   k: K, tokenTpl: Kcc20Template,
   sellerToken: { transactionId: string; index: number; value: bigint; state: Kcc20State },
-  sellAmount: bigint, presenceWitnessIdx: number, opts: { tokenDust?: bigint } = {},
+  sellAmount: bigint, presenceWitnessIdx: number, opts: { tokenDust?: bigint; tokenCovid?: string } = {},
 ): CovenantSpend {
   const change = sellerToken.state.amount - sellAmount;
   if (sellAmount <= 0n || change <= 0n) throw new Error('split requires 0 < sellAmount < the UTXO amount');
@@ -312,25 +314,28 @@ export function buildSplitToken(
   const out1 = addressPresenceOwned(owner, sellAmount);   // the piece to sell (output 0)
   const out2 = addressPresenceOwned(owner, change);       // the change (output 1)
   const redeem = materializeKcc20Script(tokenTpl, sellerToken.state);
+  const binding = opts.tokenCovid ? { covid: opts.tokenCovid, authorizingInput: 0 } : undefined; // ← the seller-token input
   const inputs: CovInput[] = [
     { transactionId: sellerToken.transactionId, index: sellerToken.index, value: sellerToken.value, scriptPublicKey: kcc20Spk(k, redeem), signatureScript: transferSigScript(k, redeem, [out1, out2], [presenceWitnessIdx]), redeem, role: 'sellerToken' },
   ];
   const outputs: CovOutput[] = [
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, out1)), role: 'split' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, out2)), role: 'change' },
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, out1)), role: 'split', binding },
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, out2)), role: 'change', binding },
   ];
-  return { kind: 'sell', inputs, outputs, economics: { sellAmount, change }, covids: { tokenCovid: hexOf(owner) } };
+  return { kind: 'sell', inputs, outputs, economics: { sellAmount, change }, covids: opts.tokenCovid ? { tokenCovid: opts.tokenCovid } : {} };
 }
 
 /**
  * Consolidate several presence-owned token UTXOs (same owner) into ONE — a conserving kcc20 transfer (N covid-A
  * inputs → 1 output) authorized by a single co-present P2PK input at `presenceWitnessIdx`. Lets a holder merge
  * many small buys into one piece so a later sell needs just one (or two) inputs. No curve/pool involved.
+ * Pass `opts.tokenCovid` (the token's covenant id, hex) so the merged output carries the KIP-20 covenant
+ * binding the chain requires; without it the assembled tx fails on-chain.
  */
 export function buildConsolidate(
   k: K, tokenTpl: Kcc20Template,
   tokens: { transactionId: string; index: number; value: bigint; state: Kcc20State }[],
-  presenceWitnessIdx: number, opts: { tokenDust?: bigint } = {},
+  presenceWitnessIdx: number, opts: { tokenDust?: bigint; tokenCovid?: string } = {},
 ): CovenantSpend {
   if (tokens.length < 2) throw new Error('consolidate needs at least 2 UTXOs');
   const dust = opts.tokenDust ?? 1000n;
@@ -343,10 +348,11 @@ export function buildConsolidate(
     const r = materializeKcc20Script(tokenTpl, t.state);
     return { transactionId: t.transactionId, index: t.index, value: t.value, scriptPublicKey: kcc20Spk(k, r), signatureScript: transferSigScript(k, r, newStates, witnesses), redeem: r, role: 'token' };
   });
+  const binding = opts.tokenCovid ? { covid: opts.tokenCovid, authorizingInput: 0 } : undefined; // ← the first token input
   const outputs: CovOutput[] = [
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, merged)), role: 'merged' },
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, merged)), role: 'merged', binding },
   ];
-  return { kind: 'sell', inputs, outputs, economics: { total }, covids: { tokenCovid: hexOf(owner) } };
+  return { kind: 'sell', inputs, outputs, economics: { total }, covids: opts.tokenCovid ? { tokenCovid: opts.tokenCovid } : {} };
 }
 
 const hexOf = (u8: Uint8Array): string => Array.from(u8, (b) => b.toString(16).padStart(2, '0')).join('');

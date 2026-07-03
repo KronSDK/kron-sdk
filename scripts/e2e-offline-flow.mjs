@@ -54,7 +54,7 @@ async function main() {
 
   const tokenTplRaw = syntheticTemplate(46, [[0, 0x20], [33, 0x01], [35, 0x08], [44, 0x01]]);
   const tokenTpl = { ...tokenTplRaw, maxIns: 4, maxOuts: 4 };
-  const cpTplRaw = syntheticTemplate(35, [[0, 0x01], [2, 0x20]]);
+  const cpTplRaw = syntheticTemplate(44, [[0, 0x01], [2, 0x20], [35, 0x08]]); // 44-byte hardened state: graduated + tokenCovid + tokenReserve
   const cpTpl = {
     ...cpTplRaw,
     params: {
@@ -65,7 +65,7 @@ async function main() {
   };
   const curveCovid = randomBytes(32);
   const tokenCovid = randomBytes(32);
-  const utxo = { transactionId: 'aa'.repeat(32), index: 0, realKas: cpState.realKas, state: { graduated: false, tokenCovid } };
+  const utxo = { transactionId: 'aa'.repeat(32), index: 0, realKas: cpState.realKas, state: { graduated: false, tokenCovid, tokenReserve: cpState.tokenReserve } };
   const inventory = { transactionId: 'aa'.repeat(32), index: 1, value: 1000n, amount: cpState.tokenReserve };
 
   const buySpend = kron.curveCp.buildCpBuy(k, cpTpl, tokenTpl, utxo, inventory, curveCovid, Uint8Array.from(Buffer.from(buyerXOnly, 'hex')), buyQuote.kasIn, buyQuote.tokenOut);
@@ -81,12 +81,37 @@ async function main() {
   };
   const asm = kron.spend.assembleNativeTx(k, { spend: buySpend, fundingEntries: [fundingEntry], changeAddress: buyerPub.toAddress(k.NetworkType.Testnet).toString(), networkFee: 5000n });
   assert(asm.fundingInputIndexes.length === 1, 'exactly one funding input expected');
+  assert(Number(asm.transaction.version) === kron.spend.TX_VERSION, `assembled tx must be v${kron.spend.TX_VERSION} (KIP-20 covenant tx), got v${asm.transaction.version}`);
   const pskt = kron.spend.toPsktJson(asm);
   const signed = kron.spend.signPsktWithKey(k, pskt.txJsonString, pskt.signInputs, buyerKey);
   const reparsed = k.Transaction.deserializeFromSafeJSON(signed);
   assert(reparsed.inputs[asm.fundingInputIndexes[0]].signatureScript.length > 0, 'the funding input must now carry a signature script');
   assert(reparsed.inputs[0].signatureScript === buySpend.inputs[0].signatureScript, 'covenant input 0 signature script must be UNTOUCHED by wallet signing — this is the core fund-safety property');
-  console.log('   OK — signing touched ONLY the funding input, covenant inputs untouched');
+  console.log('   OK — v1 tx; signing touched ONLY the funding input, covenant inputs untouched');
+
+  console.log('4b. KCC-20 send (decodeKcc20Redeem + buildKcc20Send): outputs must carry covenant bindings...');
+  const senderPub32 = randomBytes(32);
+  const recipientPub32 = randomBytes(32);
+  const tokenCovidHex = tokenCovid.toString('hex');
+  const liveRedeem = kron.kcc20.materializeKcc20Script(tokenTpl, kron.kcc20.addressPresenceOwned(senderPub32, 7753n));
+  const dec = kron.kcc20.decodeKcc20Redeem(liveRedeem);
+  assert(dec.template.stateStart === tokenTpl.stateStart, 'decode must find the state region where materialize spliced it');
+  assert(dec.state.amount === 7753n && dec.state.identifierType === kron.kcc20.IDENTIFIER.ADDRESS, 'decode must recover amount + ownership mode');
+  assert(Buffer.from(dec.state.ownerIdentifier).equals(senderPub32), 'decode must recover the owner pubkey');
+  const sendSpend = kron.kcc20.buildKcc20Send(
+    k, dec.template,
+    [{ transactionId: 'cc'.repeat(32), index: 0, value: kron.spend.COVENANT_DUST, state: dec.state }],
+    recipientPub32, 3n, 1, tokenCovidHex,
+  );
+  assert(sendSpend.economics.change === 7750n, 'send must conserve: 7753 -> 3 + 7750');
+  const sendAsm = kron.spend.assembleNativeTx(k, { spend: sendSpend, fundingEntries: [fundingEntry], changeAddress: buyerPub.toAddress(k.NetworkType.Testnet).toString(), networkFee: 10_000n });
+  for (const [i, out] of [...sendAsm.transaction.outputs.slice(0, 2)].entries()) {
+    const b = out.covenant;
+    assert(b, `token output ${i} must carry a CovenantBinding`);
+    assert(String(b.covenantId ?? b.covenant_id ?? '').replace(/^0x/, '') === tokenCovidHex, `token output ${i} binding must target the token covid`);
+  }
+  assert(sendAsm.transaction.outputs[2].covenant === undefined, 'the KAS change output must NOT carry a binding');
+  console.log('   OK — send outputs bound to the token covenant id, change unbound');
 
   console.log('5. Token-list entry verification (verify.verifyTokenListEntry, injected stub fetcher)...');
   const covidA = 'a1'.repeat(32);

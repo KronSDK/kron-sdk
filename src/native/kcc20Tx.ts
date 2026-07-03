@@ -13,6 +13,7 @@
 //
 // No top-level SDK import (only `import type`) — caller passes the loaded WASM namespace `k`.
 import type { Kaspa } from '../wasm/kaspa.types.js';
+import type { CovInput, CovOutput, CovenantSpend } from './spend.js';
 import { SigScriptBuilder, int8LE } from './sigscript.js';
 
 type K = Kaspa;
@@ -56,6 +57,38 @@ export function materializeKcc20Script(tpl: Kcc20Template, state: Kcc20State): U
   out[s + 44] = 0x01;
   out[s + 45] = state.isMinter ? 1 : 0;
   return out;
+}
+
+// --- redeem-script decode (template + state from a live UTXO's redeemScriptHex) ------------------
+
+/**
+ * Recover the `{ script, stateStart }` template AND the current balance state from a live token UTXO's
+ * redeem script (your indexer's `redeemScriptHex`). Scans for the 46-byte state region's push layout
+ * (`0x20 <owner:32> 0x01 <type:1> 0x08 <amount:8> 0x01 <isMinter:1>` with type ≤ 0x03, isMinter ≤ 1) and
+ * requires it to match at exactly ONE offset. This is the supported way to build the template for
+ * `materializeKcc20Script` — splice the SAME script the chain holds; never re-compile.
+ * `maxIns`/`maxOuts` are compiled constants not recoverable from the bytes — pass the token's deploy
+ * params if you know them (KRON deploys use 4/4, the default) — they are informational only (the splice
+ * uses just `script` + `stateStart`).
+ */
+export function decodeKcc20Redeem(redeem: Uint8Array, opts: { maxIns?: number; maxOuts?: number } = {}): { template: Kcc20Template; state: Kcc20State } {
+  const hits: number[] = [];
+  for (let s = 0; s + STATE_LEN <= redeem.length; s++) {
+    if (redeem[s] === 0x20 && redeem[s + 33] === 0x01 && redeem[s + 34] <= 0x03 && redeem[s + 35] === 0x08 && redeem[s + 44] === 0x01 && redeem[s + 45] <= 1) hits.push(s);
+  }
+  if (hits.length !== 1) throw new Error(`could not locate the kcc20 state region in the redeem script (${hits.length} candidate offsets) — is this a kcc20 token UTXO?`);
+  const s = hits[0];
+  let amount = 0n;
+  for (let i = 7; i >= 0; i--) amount = (amount << 8n) | BigInt(redeem[s + 36 + i]);
+  return {
+    template: { script: redeem.slice(), stateStart: s, maxIns: opts.maxIns ?? 4, maxOuts: opts.maxOuts ?? 4 },
+    state: {
+      ownerIdentifier: redeem.slice(s + 1, s + 33),
+      identifierType: redeem[s + 34] as IdentifierType,
+      amount,
+      isMinter: redeem[s + 45] === 1,
+    },
+  };
 }
 
 // --- scriptPublicKeys + address ----------------------------------------------------------------
@@ -147,4 +180,43 @@ export function transferSigScript(
   b.data(Uint8Array.from(witnesses, (w) => w & 0xff)); // byte[] witnesses
   b.redeem(redeem);
   return b.drain();
+}
+
+// --- send (wallet "Send" — the plain user→user transfer) ----------------------------------------
+
+/**
+ * Send `sendAmount` from one or more presence-owned token UTXOs (same owner) to `recipientPubkey32`, with
+ * the remainder returned to the sender — the wallet "Send" button. A plain conserving `transfer`: inputs
+ * are authorized by ONE co-present P2PK input at tx index `presenceWitnessIdx` (assemble the covenant
+ * inputs first, then the sender's funding inputs: with N token inputs, `presenceWitnessIdx = N`).
+ *
+ * `tokenCovid` (the token's covenant id, hex — `covenantId` from the indexer's token info) is REQUIRED:
+ * every covenant output must carry the KIP-20 `CovenantBinding` or the chain rejects the spend with
+ * "script ran, but verification failed". Outputs: [recipient, change] (change omitted when exact).
+ */
+export function buildKcc20Send(
+  k: K, tpl: Kcc20Template,
+  senderTokens: { transactionId: string; index: number; value: bigint; state: Kcc20State }[],
+  recipientPubkey32: Uint8Array, sendAmount: bigint, presenceWitnessIdx: number, tokenCovid: string,
+  opts: { tokenDust?: bigint } = {},
+): CovenantSpend {
+  if (senderTokens.length < 1) throw new Error('send requires at least one token UTXO');
+  if (!tokenCovid) throw new Error('send requires the token covenant id (indexer token info `covenantId`) for the output bindings');
+  const total = senderTokens.reduce((s, t) => s + t.state.amount, 0n);
+  const change = total - sendAmount;
+  if (sendAmount < 1n || change < 0n) throw new Error(`send requires 1 <= sendAmount <= ${total} (the selected UTXOs' total)`);
+  const dust = opts.tokenDust ?? 50_000_000n; // COVENANT_DUST — KIP-9 storage-mass floor for covenant outputs
+  const owner = senderTokens[0].state.ownerIdentifier;
+  const recipientOut = addressPresenceOwned(recipientPubkey32, sendAmount);
+  const newStates = change >= 1n ? [recipientOut, addressPresenceOwned(owner, change)] : [recipientOut];
+  const witnesses = senderTokens.map(() => presenceWitnessIdx); // every token input authorized by the one P2PK
+  const inputs: CovInput[] = senderTokens.map((t) => {
+    const r = materializeKcc20Script(tpl, t.state);
+    return { transactionId: t.transactionId, index: t.index, value: t.value, scriptPublicKey: kcc20Spk(k, r), signatureScript: transferSigScript(k, r, newStates, witnesses), redeem: r, role: 'token' };
+  });
+  const binding = { covid: tokenCovid, authorizingInput: 0 }; // ← the first token input carries covid A
+  const outputs: CovOutput[] = newStates.map((st, i) => ({
+    value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tpl, st)), role: i === 0 ? 'send' : 'change', binding,
+  }));
+  return { kind: 'transfer', inputs, outputs, economics: { sendAmount, change }, covids: { tokenCovid } };
 }

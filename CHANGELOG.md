@@ -3,6 +3,58 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.5.0
+
+### Fixed — `assembleNativeTx` produced transactions the chain always rejects
+
+`assembleNativeTx` built **version-0** transactions with no `CovenantBinding`
+on the covenant outputs. A v0 output cannot carry a covenant binding, so the
+outputs never joined the covenant-id group, the covenant's
+`OpCovOutputCount(id)` check saw zero outputs, and every assembled spend was
+rejected on-chain with `script ran, but verification failed` (the signature
+script itself was correct — the transaction body was the problem). All
+`0.2.x`–`0.4.x` consumers of `assembleNativeTx` are affected; the builders'
+signature scripts were and are correct.
+
+- `assembleNativeTx` now builds KIP-20 **v1** transactions: covenant outputs
+  carry `CovenantBinding(authorizingInput, covenantId)` (from the new
+  `CovOutput.binding` field) and every input carries a v1 `computeBudget`
+  (role-based defaults; override per input via `CovInput.computeBudget`).
+- New `kron.spend.estimateNativeFee(k, networkId, asm, feeRateSompiPerGram)` —
+  v1 fees must cover the per-input compute budget on top of byte/storage
+  mass; a flat legacy fee is too low. Assemble with a placeholder fee, call
+  this, re-assemble with the result.
+- New constants: `TX_VERSION`, `FUNDING_COMPUTE`, `TOKEN_COMPUTE`,
+  `COVENANT_COMPUTE`, `COVENANT_DUST`.
+
+### Added — first-class KCC-20 "Send" path
+
+- `kron.kcc20.buildKcc20Send(k, tpl, senderTokens, recipientPubkey32,
+  sendAmount, presenceWitnessIdx, tokenCovid, opts?)` — the user→user wallet
+  "Send": N presence-owned token UTXOs → `[recipient, change]`, outputs
+  binding-complete (requires the token's `covenantId` from the indexer).
+- `kron.kcc20.decodeKcc20Redeem(redeem, opts?)` — recover the splice template
+  (`{script, stateStart}`) **and** the current balance state from a live
+  UTXO's `redeemScriptHex`, replacing hand-rolled state decoding.
+- `kron.curveCp.buildSplitToken` / `buildConsolidate` accept
+  `opts.tokenCovid` and set the output bindings when given. Their
+  `covids.tokenCovid` result field previously reported the **owner pubkey**
+  (not the token covenant id!) — it is now the real covenant id when
+  `opts.tokenCovid` is passed, and omitted otherwise. Never use the owner
+  pubkey as a binding id.
+- Runnable end-to-end example: `scripts/example-kcc20-send.mjs`
+  (documented in `docs/INTEGRATION.md` §5).
+
+### Migration
+
+If you assembled transactions yourself (bypassing `assembleNativeTx`), build
+them as v1: `new Transaction({ version: 1, ... })`, covenant outputs as
+`new TransactionOutput(value, spk, new CovenantBinding(authorizingInput, new
+Hash(covidHex)))`, and every input with a `computeBudget`. If you used
+`assembleNativeTx`, upgrade and pass the covenant id to the kcc20 builders
+(`buildKcc20Send` requires it; `buildSplitToken`/`buildConsolidate` via
+`opts.tokenCovid`).
+
 ## 0.4.0
 
 ### Changed (BREAKING) — curve hardening
