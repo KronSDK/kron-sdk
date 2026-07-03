@@ -281,6 +281,9 @@ export function buildAddLiquidity(
   if (lpDepositToken.state.amount !== q.dToken) throw new Error('LP deposit token UTXO must equal dToken exactly (split first)');
   const dust = opts.tokenDust ?? 1000n;
   const { kasReserve, tokenReserve, tokenCovid, lpCovid } = utxo.state;
+  const poolCovidHex = hexOf(poolCovid);
+  const tokenCovidHex = hexOf(tokenCovid);
+  const lpCovidHex = hexOf(lpCovid);
   const poolTokenOut = covenantIdOwned(poolCovid, q.newToken, false);          // grown token-A reserve (P)
   const poolLpOut = covenantIdOwned(poolCovid, lpInventory.amount - q.dShares, false); // reduced L inventory (P)
   const lpSharesOut = addressPresenceOwned(lpPubkey, q.dShares);               // the LP's new shares (presence)
@@ -305,12 +308,12 @@ export function buildAddLiquidity(
     { transactionId: lpInventory.transactionId, index: lpInventory.index, value: lpInventory.value, scriptPublicKey: kcc20Spk(k, poolLpInvRedeem), signatureScript: transferSigScript(k, poolLpInvRedeem, lStates, lWitnesses), redeem: poolLpInvRedeem, role: 'poolLpInventory' },
   ];
   const outputs: CovOutput[] = [
-    { value: q.newKas * SCALE, scriptPublicKey: poolCpSpk(k, newRedeem), role: 'pool' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolLpOut)), role: 'poolLpInventory' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, lpSharesOut)), role: 'lpShares' },
+    { value: q.newKas * SCALE, scriptPublicKey: poolCpSpk(k, newRedeem), role: 'pool', binding: { covid: poolCovidHex, authorizingInput: 0 } },
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 2 } },
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolLpOut)), role: 'poolLpInventory', binding: { covid: lpCovidHex, authorizingInput: 3 } },
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, lpSharesOut)), role: 'lpShares', binding: { covid: lpCovidHex, authorizingInput: 3 } },
   ];
-  return { kind: 'addLiquidity', inputs, outputs, economics: { dKas: q.dKas, dToken: q.dToken, dShares: q.dShares, newShares: q.newShares }, covids: { poolCovid: hexOf(poolCovid), tokenCovid: hexOf(tokenCovid) } };
+  return { kind: 'addLiquidity', inputs, outputs, economics: { dKas: q.dKas, dToken: q.dToken, dShares: q.dShares, newShares: q.newShares }, covids: { poolCovid: poolCovidHex, tokenCovid: tokenCovidHex } };
 }
 
 /**
@@ -331,6 +334,9 @@ export function buildRemoveLiquidity(
   if (lpShares.state.amount !== q.dShares) throw new Error('LP shares UTXO must equal dShares exactly (split first)');
   const dust = opts.tokenDust ?? 1000n;
   const { kasReserve, tokenReserve, tokenCovid, lpCovid } = utxo.state;
+  const poolCovidHex = hexOf(poolCovid);
+  const tokenCovidHex = hexOf(tokenCovid);
+  const lpCovidHex = hexOf(lpCovid);
   const poolTokenOut = covenantIdOwned(poolCovid, q.newToken, false);   // shrunk token-A reserve (P)
   const lpTokenOut = addressPresenceOwned(lpPubkey, q.dToken);          // the LP's withdrawn token (presence)
   const poolLpOut = covenantIdOwned(poolCovid, q.dShares, false);       // dShares returned to inventory (P)
@@ -353,12 +359,12 @@ export function buildRemoveLiquidity(
     { transactionId: lpShares.transactionId, index: lpShares.index, value: lpShares.value, scriptPublicKey: kcc20Spk(k, lpSharesRedeem), signatureScript: transferSigScript(k, lpSharesRedeem, lStates, lWitnesses), redeem: lpSharesRedeem, role: 'lpShares' },
   ];
   const outputs: CovOutput[] = [
-    { value: q.newKas * SCALE, scriptPublicKey: poolCpSpk(k, newRedeem), role: 'pool' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, lpTokenOut)), role: 'lpToken' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolLpOut)), role: 'poolLpInventory' },
+    { value: q.newKas * SCALE, scriptPublicKey: poolCpSpk(k, newRedeem), role: 'pool', binding: { covid: poolCovidHex, authorizingInput: 0 } },
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, lpTokenOut)), role: 'lpToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolLpOut)), role: 'poolLpInventory', binding: { covid: lpCovidHex, authorizingInput: 2 } },
   ];
-  return { kind: 'removeLiquidity', inputs, outputs, economics: { dShares: q.dShares, dKas: q.dKas, dToken: q.dToken, newShares: q.newShares }, covids: { poolCovid: hexOf(poolCovid), tokenCovid: hexOf(tokenCovid) } };
+  return { kind: 'removeLiquidity', inputs, outputs, economics: { dShares: q.dShares, dKas: q.dKas, dToken: q.dToken, newShares: q.newShares }, covids: { poolCovid: poolCovidHex, tokenCovid: tokenCovidHex } };
 }
 
 // =================================================================================================
@@ -411,10 +417,11 @@ export function buildBindLp(
   const inputs: CovInput[] = [
     { transactionId: utxo.transactionId, index: utxo.index, value: poolValue, scriptPublicKey: poolCpSpk(k, curRedeem), signatureScript: bindSig, redeem: curRedeem, role: 'pool' },
   ];
+  const poolCovidHex = hexOf(poolCovid);
   const outputs: CovOutput[] = [
-    { value: poolValue, scriptPublicKey: poolCpSpk(k, boundRedeem), role: 'pool' },
-    { value: dust, scriptPublicKey: floorSpk, role: 'lpFloor' },
-    { value: dust, scriptPublicKey: invSpk, role: 'lpInventory' },
+    { value: poolValue, scriptPublicKey: poolCpSpk(k, boundRedeem), role: 'pool', binding: { covid: poolCovidHex, authorizingInput: 0 } },
+    { value: dust, scriptPublicKey: floorSpk, role: 'lpFloor', binding: { covid: lpCovidHex, authorizingInput: 0 } },
+    { value: dust, scriptPublicKey: invSpk, role: 'lpInventory', binding: { covid: lpCovidHex, authorizingInput: 0 } },
   ];
-  return { kind: 'bindLp', inputs, outputs, economics: { lockedShares, inventoryAmount }, covids: { poolCovid: hexOf(poolCovid), tokenCovid: hexOf(tokenCovid) }, lpCovidHex, lpInventoryAmount: inventoryAmount };
+  return { kind: 'bindLp', inputs, outputs, economics: { lockedShares, inventoryAmount }, covids: { poolCovid: poolCovidHex, tokenCovid: hexOf(tokenCovid) }, lpCovidHex, lpInventoryAmount: inventoryAmount };
 }

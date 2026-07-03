@@ -3,6 +3,67 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.6.0
+
+### Fixed — trade/LP/vesting builders produced transactions the chain always rejects
+
+0.5.0 fixed `assembleNativeTx` and the kcc20 builders (`buildKcc20Send`,
+`buildSplitToken`, `buildConsolidate`) to attach the KIP-20 `CovenantBinding`
+required on every covenant output — but the curve, pool/LP, and vesting
+builders still returned outputs with `binding` unset. A consumer assembling
+those spends with `assembleNativeTx` got the same on-chain rejection
+(`script ran, but verification failed`) unless they patched
+`spend.outputs[i].binding` in manually. All are now wired automatically,
+mirroring exactly what the reference KRON web app's flows do (see
+`web/src/tradeCpFlow.ts`, `swapPoolFlow.ts`, `lpFlow.ts`,
+`claimVestingFlow.ts` in the kron monorepo).
+
+- `curveCp.buildCpBuy` / `buildCpSell` — curve continuation bound to the
+  curve covid `C` (authorized by input 0); inventory / recipient / seller-
+  change outputs bound to the token covid `A` (authorized by input 1, the
+  inventory input). Fee outputs are correctly left unbound (plain P2PK).
+- `curveCp.buildCpGraduate` — locked curve bound to `C` (input 0); the new
+  pool's genesis output bound to the freshly-derived pool covid `P`
+  (authorized by input 0, the curve input — pool genesis has no input of
+  its own yet); the pool-token output bound to `A` (authorized by input 1,
+  the inventory input). The graduation-fee output stays unbound.
+- `poolCpV3.buildPoolV3SwapKasForToken` / `buildPoolV3SwapTokenForKas` —
+  pool continuation bound to the pool covid `P` (input 0); pool-token /
+  trader / trader-change outputs bound to `A` (input 1, the pool-token
+  input). Fee outputs stay unbound.
+- `poolCp.buildAddLiquidity` — pool continuation bound to `P` (input 0);
+  grown reserve bound to `A` (input 2, the pool-reserve input); reduced L
+  inventory + the LP's new shares bound to the pool's LP covid `L` (input
+  3, the L-inventory input).
+- `poolCp.buildRemoveLiquidity` — pool continuation bound to `P` (input 0);
+  shrunk reserve + the LP's withdrawn token bound to `A` (input 1, the
+  pool-reserve input); shares returned to inventory bound to `L` (input 2,
+  the LP-shares input).
+- `poolCp.buildBindLp` — pool continuation bound to `P` (input 0); the
+  locked floor + the pool's new L inventory bound to the freshly-derived L
+  covid (also input 0 — bindLp has a single input).
+- `vesting.buildVestingClaim` / `buildVestingClaimFinal` gain an
+  `opts.tokenCovid` parameter (same optional pattern as
+  `buildSplitToken`/`buildConsolidate`): the vesting-continuation output is
+  always bound to `vestingCovid` (already a required param); the relock /
+  recipient outputs are bound to `opts.tokenCovid` when passed, and left
+  unbound (as before) when omitted.
+
+None of this changes any signature script, redeem script, or output value —
+bindings live entirely on `CovOutput`/transaction-output metadata, so
+assembled transactions remain byte-identical to the covenant-verified
+reference builders (`npm run verify:parity`, which does not compare
+bindings, still passes).
+
+### Migration
+
+If you called any of the above builders directly and relied on setting
+`spend.outputs[i].binding` yourself before calling `assembleNativeTx`, you
+can drop that step — the builders now do it for you. `buildVestingClaim` /
+`buildVestingClaimFinal` callers who want the relock/recipient outputs
+bound should pass `opts.tokenCovid` (the vested token's `covenantId`, hex,
+from your indexer).
+
 ## 0.5.0
 
 ### Fixed — `assembleNativeTx` produced transactions the chain always rejects

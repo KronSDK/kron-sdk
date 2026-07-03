@@ -70,6 +70,8 @@ export function buildPoolV3SwapKasForToken(
 ): CovenantSpend {
   const dust = opts.tokenDust ?? 1000n;
   const { kasReserve, tokenReserve, tokenCovid, totalShares, lpCovid } = utxo.state;
+  const poolCovidHex = hexOf(poolCovid);
+  const tokenCovidHex = hexOf(tokenCovid);
   const mergeSum = mergeTokens.reduce((s, t) => s + t.state.amount, 0n);
   const poolTokenOut = covenantIdOwned(poolCovid, q.newToken, false);
   const traderTokenOut = addressPresenceOwned(traderPubkey, q.tokenOut + mergeSum);
@@ -88,13 +90,13 @@ export function buildPoolV3SwapKasForToken(
     }),
   ];
   const outputs: CovOutput[] = [
-    { value: q.newKas * SCALE, scriptPublicKey: poolCpV3Spk(k, newRedeem), role: 'pool' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, traderTokenOut)), role: 'trader' },
+    { value: q.newKas * SCALE, scriptPublicKey: poolCpV3Spk(k, newRedeem), role: 'pool', binding: { covid: poolCovidHex, authorizingInput: 0 } },
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, traderTokenOut)), role: 'trader', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
     { value: q.creatorOut, scriptPublicKey: p2pkSpk(k, params.creatorFeeOwner), role: 'creatorFee' },
     { value: q.platformOut, scriptPublicKey: p2pkSpk(k, params.platformFeeOwner), role: 'platformFee' },
   ];
-  return { kind: 'swapKasForToken', inputs, outputs, economics: { kasIn: q.kasIn, tokenOut: q.tokenOut }, covids: { poolCovid: hexOf(poolCovid), tokenCovid: hexOf(tokenCovid) } };
+  return { kind: 'swapKasForToken', inputs, outputs, economics: { kasIn: q.kasIn, tokenOut: q.tokenOut }, covids: { poolCovid: poolCovidHex, tokenCovid: tokenCovidHex } };
 }
 
 /** swapTokenForKas (v3 — FRACTIONAL): fold `q.tokenIn` of the trader's piece(s) into the pool, getting kasOut;
@@ -109,6 +111,8 @@ export function buildPoolV3SwapTokenForKas(
   if (traderTokens.length < 1) throw new Error('need at least one trader token');
   const dust = opts.tokenDust ?? 1000n;
   const { kasReserve, tokenReserve, tokenCovid, totalShares, lpCovid } = utxo.state;
+  const poolCovidHex = hexOf(poolCovid);
+  const tokenCovidHex = hexOf(tokenCovid);
   const traderIn = traderTokens.reduce((s, t) => s + t.state.amount, 0n);
   const change = traderIn - q.tokenIn;   // q.tokenIn == the amount folded into the reserve
   if (change < 0n) throw new Error('trader inputs are less than the sell amount');
@@ -130,11 +134,11 @@ export function buildPoolV3SwapTokenForKas(
     }),
   ];
   const outputs: CovOutput[] = [
-    { value: q.newKas * SCALE, scriptPublicKey: poolCpV3Spk(k, newRedeem), role: 'pool' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken' },
+    { value: q.newKas * SCALE, scriptPublicKey: poolCpV3Spk(k, newRedeem), role: 'pool', binding: { covid: poolCovidHex, authorizingInput: 0 } },
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
     { value: q.creatorOut, scriptPublicKey: p2pkSpk(k, params.creatorFeeOwner), role: 'creatorFee' },
     { value: q.platformOut, scriptPublicKey: p2pkSpk(k, params.platformFeeOwner), role: 'platformFee' },
   ];
-  if (hasChange) outputs.push({ value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, traderChangeOut)), role: 'trader' });
-  return { kind: 'swapTokenForKas', inputs, outputs, economics: { kasOut: q.kasOut, tokenIn: q.tokenIn }, covids: { poolCovid: hexOf(poolCovid), tokenCovid: hexOf(tokenCovid) } };
+  if (hasChange) outputs.push({ value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, traderChangeOut)), role: 'trader', binding: { covid: tokenCovidHex, authorizingInput: 1 } });
+  return { kind: 'swapTokenForKas', inputs, outputs, economics: { kasOut: q.kasOut, tokenIn: q.tokenIn }, covids: { poolCovid: poolCovidHex, tokenCovid: tokenCovidHex } };
 }

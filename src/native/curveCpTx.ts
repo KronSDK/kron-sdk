@@ -136,6 +136,8 @@ export function buildCpBuy(
   if (tokenOut <= 0n || tokenOut >= inventory.amount) throw new Error('invalid tokenOut');
   if (inventory.amount !== utxo.state.tokenReserve) throw new Error('inventory.amount must equal the curve\'s committed tokenReserve');
   const dust = opts.tokenDust ?? 1000n;
+  const curveCovidHex = hexOf(curveCovid);
+  const tokenCovidHex = hexOf(utxo.state.tokenCovid);
   const newKas = utxo.realKas + kasIn;
   // Overbuy allowed: a buy may exceed graduationKas (excess seeds the LP at graduation). Only MAX_KAS caps it.
   if (newKas > MAX_KAS) throw new Error('buy exceeds the curve max raise (9,000,000 TKAS)');
@@ -165,13 +167,13 @@ export function buildCpBuy(
     }),
   ];
   const outputs: CovOutput[] = [
-    { value: newKas, scriptPublicKey: cpSpk(k, newCurveRedeem), role: 'curve' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, invOutRedeem), role: 'inventory' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, buyerRedeem), role: 'recipient' },
+    { value: newKas, scriptPublicKey: cpSpk(k, newCurveRedeem), role: 'curve', binding: { covid: curveCovidHex, authorizingInput: 0 } },
+    { value: dust, scriptPublicKey: kcc20Spk(k, invOutRedeem), role: 'inventory', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
+    { value: dust, scriptPublicKey: kcc20Spk(k, buyerRedeem), role: 'recipient', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
     { value: padFee(creatorFee), scriptPublicKey: p2pkSpk(k, tpl.params.creatorFeeOwner), role: 'creatorFee' },
     { value: padFee(platformFee), scriptPublicKey: p2pkSpk(k, tpl.params.platformFeeOwner), role: 'platformFee' },
   ];
-  return { kind: 'buy', inputs, outputs, economics: { kasIn, tokenOut, creatorFee, platformFee, newRealKas: newKas, newTokenReserve: newToken, merged: mergeSum }, covids: { tokenCovid: hexOf(utxo.state.tokenCovid) } };
+  return { kind: 'buy', inputs, outputs, economics: { kasIn, tokenOut, creatorFee, platformFee, newRealKas: newKas, newTokenReserve: newToken, merged: mergeSum }, covids: { tokenCovid: tokenCovidHex } };
 }
 
 // --- sell (single-token, FRACTIONAL): fold `tokenIn` from the seller's piece(s), refund kasOut, return the
@@ -199,6 +201,8 @@ export function buildCpSell(
   if (kasOut <= 0n || kasOut % SCALE !== 0n || kasOut > utxo.realKas) throw new Error('invalid kasOut');
   if (inventory.amount !== utxo.state.tokenReserve) throw new Error('inventory.amount must equal the curve\'s committed tokenReserve');
   const dust = opts.tokenDust ?? 1000n;
+  const curveCovidHex = hexOf(curveCovid);
+  const tokenCovidHex = hexOf(utxo.state.tokenCovid);
   const sellerIn = sellerTokens.reduce((s, t) => s + t.state.amount, 0n);
   const change = sellerIn - tokenIn;  // the unsold remainder (kcc20 conservation pins it on-chain)
   if (change < 0n) throw new Error('seller inputs are less than the sell amount');
@@ -226,13 +230,13 @@ export function buildCpSell(
     }),
   ];
   const outputs: CovOutput[] = [
-    { value: utxo.realKas - kasOut, scriptPublicKey: cpSpk(k, newCurveRedeem), role: 'curve' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, invOutRedeem), role: 'inventory' },
+    { value: utxo.realKas - kasOut, scriptPublicKey: cpSpk(k, newCurveRedeem), role: 'curve', binding: { covid: curveCovidHex, authorizingInput: 0 } },
+    { value: dust, scriptPublicKey: kcc20Spk(k, invOutRedeem), role: 'inventory', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
     { value: padFee(creatorFee), scriptPublicKey: p2pkSpk(k, tpl.params.creatorFeeOwner), role: 'creatorFee' },
     { value: padFee(platformFee), scriptPublicKey: p2pkSpk(k, tpl.params.platformFeeOwner), role: 'platformFee' },
   ];
-  if (hasChange) outputs.push({ value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, traderChangeOut)), role: 'seller' });
-  return { kind: 'sell', inputs, outputs, economics: { tokenIn, kasOut, change, creatorFee, platformFee, newRealKas: utxo.realKas - kasOut, newTokenReserve: newToken }, covids: { tokenCovid: hexOf(utxo.state.tokenCovid) } };
+  if (hasChange) outputs.push({ value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, traderChangeOut)), role: 'seller', binding: { covid: tokenCovidHex, authorizingInput: 1 } });
+  return { kind: 'sell', inputs, outputs, economics: { tokenIn, kasOut, change, creatorFee, platformFee, newRealKas: utxo.realKas - kasOut, newTokenReserve: newToken }, covids: { tokenCovid: tokenCovidHex } };
 }
 
 // --- graduate: lock curve, seed the CP pool (amm_pool_cp_v3) with the 5-field PoolState (locked floor, L unbound) ---
@@ -285,10 +289,12 @@ export function buildCpGraduate(
     { transactionId: utxo.transactionId, index: utxo.index, value: utxo.realKas, scriptPublicKey: cpSpk(k, curRedeem), signatureScript: graduateSigV2(k, curRedeem, poolState, poolTokens), redeem: curRedeem, role: 'curve' },
     { transactionId: inventory.transactionId, index: inventory.index, value: inventory.value, scriptPublicKey: kcc20Spk(k, invRedeem), signatureScript: transferSigScript(k, invRedeem, [poolTokens], [0]), redeem: invRedeem, role: 'inventory' },
   ];
+  const curveCovidHex = hexOf(curveCovid);
+  const tokenCovidHex = hexOf(A);
   const outputs: CovOutput[] = [
-    { value: lockedValue, scriptPublicKey: cpSpk(k, lockedRedeem), role: 'curve' },
-    { value: poolKas, scriptPublicKey: poolSpkV, role: 'pool' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, poolTokenRedeem), role: 'poolToken' },
+    { value: lockedValue, scriptPublicKey: cpSpk(k, lockedRedeem), role: 'curve', binding: { covid: curveCovidHex, authorizingInput: 0 } },
+    { value: poolKas, scriptPublicKey: poolSpkV, role: 'pool', binding: { covid: poolCovidHex, authorizingInput: 0 } },
+    { value: dust, scriptPublicKey: kcc20Spk(k, poolTokenRedeem), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
     { value: padFee(gradFee), scriptPublicKey: p2pkSpk(k, tpl.params.platformFeeOwner), role: 'gradFee' },
   ];
   return { kind: 'graduate', inputs, outputs, economics: { poolKas, gradFee, leftover, poolLockedShares }, covids: { tokenCovid: hexOf(A), poolCovid: poolCovidHex } };

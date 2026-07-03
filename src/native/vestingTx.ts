@@ -24,6 +24,8 @@ type Spk = any;
 // entrypoint selectors — vesting.sil declares claim then claimFinal
 export const VEST_SELECTOR = { claim: 0, claimFinal: 1 } as const;
 
+const hexOf = (u8: Uint8Array): string => Array.from(u8, (b) => b.toString(16).padStart(2, '0')).join('');
+
 /** Tokens vested by DAA score `daaScore` (linear from startScore over durationScore; capped at total). Mirrors
  *  the covenant's cross-multiplied bound exactly, so the flow can offer `vested − claimed` to claim. */
 export function vestedAmount(total: bigint, startScore: number, durationScore: number, daaScore: number): bigint {
@@ -64,6 +66,10 @@ export type VestUtxo = { transactionId: string; index: number; value: bigint };
  * Partial claim: release `release` (0 < release < remaining) to the creator's presence, re-lock the rest under
  * V. inputs [vesting(0), lockedToken(1)]; outputs [vesting cont(0), relock(1, A/V-owned), recipient(2, A/creator)].
  * The flow must set tx.lockTime = current DAA score (consensus blocks the tx until then; the covenant reads it).
+ *
+ * Pass `opts.tokenCovid` (the vested token's covenant id, hex — `covenantId` from the indexer) so the relock +
+ * recipient outputs carry the KIP-20 covenant binding the chain requires; without it the assembled tx fails
+ * on-chain. The vesting-continuation output is always bound to `vestingCovid` (already a required param).
  */
 export function buildVestingClaim(
   k: K,
@@ -75,13 +81,15 @@ export function buildVestingClaim(
   creatorPubkey: Uint8Array,
   claimed: bigint,
   release: bigint,
-  opts: { tokenDust?: bigint } = {},
+  opts: { tokenDust?: bigint; tokenCovid?: string } = {},
 ): CovenantSpend {
   const total = BigInt(vestTpl.params.total);
   if (claimed < 0n || claimed >= total) throw new Error('nothing left to claim');
   const remaining = total - claimed;
   if (release <= 0n || release >= remaining) throw new Error('partial claim must be > 0 and < remaining (use claimFinal to drain)');
   const dust = opts.tokenDust ?? 1000n;
+  const vestingCovidHex = hexOf(vestingCovid);
+  const tokenBinding = opts.tokenCovid ? { covid: opts.tokenCovid, authorizingInput: 1 } : undefined;
   const newClaimed = claimed + release, newRemaining = remaining - release;
 
   const curRedeem = materializeVestingScript(vestTpl, claimed);
@@ -101,15 +109,18 @@ export function buildVestingClaim(
     { transactionId: lockedToken.transactionId, index: lockedToken.index, value: lockedToken.value, scriptPublicKey: kcc20Spk(k, lockedRedeem), signatureScript: transferSigScript(k, lockedRedeem, [relockState, recipientState], [0]), redeem: lockedRedeem, role: 'lockedToken' },
   ];
   const outputs: CovOutput[] = [
-    { value: vestingUtxo.value, scriptPublicKey: vestingSpk(k, newRedeem), role: 'vesting' },        // V continuation (claimed bumped)
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, relockState)), role: 'relock' },    // re-locked (A, V-owned)
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, recipientState)), role: 'recipient' }, // to creator (A, presence)
+    { value: vestingUtxo.value, scriptPublicKey: vestingSpk(k, newRedeem), role: 'vesting', binding: { covid: vestingCovidHex, authorizingInput: 0 } },        // V continuation (claimed bumped)
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, relockState)), role: 'relock', binding: tokenBinding },    // re-locked (A, V-owned)
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, recipientState)), role: 'recipient', binding: tokenBinding }, // to creator (A, presence)
   ];
-  return { kind: 'claim', inputs, outputs, economics: { release, newClaimed } };
+  return { kind: 'claim', inputs, outputs, economics: { release, newClaimed }, covids: opts.tokenCovid ? { tokenCovid: opts.tokenCovid } : {} };
 }
 
 /** Final claim: once fully vested, pay ALL remaining to the creator and continue V with claimed=total (husk).
- *  inputs [vesting(0), lockedToken(1)]; outputs [vesting cont(0), recipient(1, A/creator)]. */
+ *  inputs [vesting(0), lockedToken(1)]; outputs [vesting cont(0), recipient(1, A/creator)].
+ *
+ *  Pass `opts.tokenCovid` (the vested token's covenant id, hex) so the recipient output carries the KIP-20
+ *  covenant binding the chain requires; without it the assembled tx fails on-chain. */
 export function buildVestingClaimFinal(
   k: K,
   vestTpl: VestingTemplate,
@@ -119,12 +130,14 @@ export function buildVestingClaimFinal(
   vestingCovid: Uint8Array,
   creatorPubkey: Uint8Array,
   claimed: bigint,
-  opts: { tokenDust?: bigint } = {},
+  opts: { tokenDust?: bigint; tokenCovid?: string } = {},
 ): CovenantSpend {
   const total = BigInt(vestTpl.params.total);
   if (claimed < 0n || claimed >= total) throw new Error('nothing left to claim');
   const remaining = total - claimed;
   const dust = opts.tokenDust ?? 1000n;
+  const vestingCovidHex = hexOf(vestingCovid);
+  const tokenBinding = opts.tokenCovid ? { covid: opts.tokenCovid, authorizingInput: 1 } : undefined;
 
   const curRedeem = materializeVestingScript(vestTpl, claimed);
   const newRedeem = materializeVestingScript(vestTpl, total);            // husk: fully claimed
@@ -141,8 +154,8 @@ export function buildVestingClaimFinal(
     { transactionId: lockedToken.transactionId, index: lockedToken.index, value: lockedToken.value, scriptPublicKey: kcc20Spk(k, lockedRedeem), signatureScript: transferSigScript(k, lockedRedeem, [recipientState], [0]), redeem: lockedRedeem, role: 'lockedToken' },
   ];
   const outputs: CovOutput[] = [
-    { value: vestingUtxo.value, scriptPublicKey: vestingSpk(k, newRedeem), role: 'vesting' },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, recipientState)), role: 'recipient' },
+    { value: vestingUtxo.value, scriptPublicKey: vestingSpk(k, newRedeem), role: 'vesting', binding: { covid: vestingCovidHex, authorizingInput: 0 } },
+    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, recipientState)), role: 'recipient', binding: tokenBinding },
   ];
-  return { kind: 'claimFinal', inputs, outputs, economics: { release: remaining } };
+  return { kind: 'claimFinal', inputs, outputs, economics: { release: remaining }, covids: opts.tokenCovid ? { tokenCovid: opts.tokenCovid } : {} };
 }
