@@ -4,10 +4,12 @@
 — a bonding-curve launchpad + AMM DEX — from any JS/TS environment.** Browser or Node. No custody, ever:
 this package only *builds* transactions; a wallet (yours, or your user's) signs them.
 
-> **Status: v0.6.1, testnet (TN10).** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.7.1, testnet (TN10).** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract and how to
-> adapt it to a specific wallet's injected provider.
+> adapt it to a specific wallet's injected provider. **0.7.0** added cross-wallet **provider discovery**
+> (announce/request events) so any Kaspa wallet can surface itself to any dApp with no per-wallet code;
+> **0.7.1** hardened the trade builders to fail fast on a few footgun inputs (see the [CHANGELOG](CHANGELOG.md)).
 >
 > **⚠️ Upgrade from < 0.6.0.** Every earlier release built **version-0** transactions, which cannot carry
 > the covenant bindings Kaspa's covenant layer (KIP-20) requires on output — every assembled spend was
@@ -42,7 +44,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.6.1       # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.7.1       # or pin an exact version for reproducible builds
 ```
 
 The package follows semver. **0.6.0 is a required upgrade for anyone building curve/pool/LP/vesting
@@ -136,7 +138,7 @@ kron-sdk
 ├─ kcc20              the KCC-20 token covenant: transfer / ownership modes / state encoding
 ├─ vesting            claim / claimFinal against an EXISTING vesting lock
 ├─ spend              tx assembly + the signPskt-style wallet-signing bridge
-├─ wallet             WalletAdapter interface + a generic reference implementation (see docs/WALLETS.md)
+├─ wallet             WalletAdapter interface, a generic reference adapter, + cross-wallet provider discovery
 ├─ client             typed REST clients: indexer, registry (incl. tokenlist()), sequencer
 ├─ verify             verify a token-list entry against the chain (anti-spoof, fetcher-injected)
 └─ /wasm              loadKaspa() — the only environment-specific (Node vs browser) export

@@ -30,8 +30,10 @@ const ceilDiv = (a: bigint, b: bigint) => (a + b - 1n) / b;
 // fresh state at build time and abort if the achievable output drops below the user-agreed minimum =
 // (quote they saw) − tolerance. Default 1%.
 export const DEFAULT_SLIPPAGE_BPS = 100;
-/** Minimum acceptable output after a slippage tolerance (bps). `out` is tokenOut (buy) or net KAS (sell). */
-export const minOutWithSlippage = (out: bigint, bps: number): bigint => out - (out * BigInt(Math.max(0, Math.round(bps)))) / 10000n;
+/** Minimum acceptable output after a slippage tolerance (bps). `out` is tokenOut (buy) or net KAS (sell).
+ *  bps is clamped to [0, 10000] (0–100%) so the result never goes negative on an out-of-range tolerance. */
+export const minOutWithSlippage = (out: bigint, bps: number): bigint =>
+  out - (out * BigInt(Math.min(10000, Math.max(0, Math.round(bps))))) / 10000n;
 
 export type CpBuyQuote = { kasIn: bigint; tokenOut: bigint; creatorFee: bigint; platformFee: bigint; fee: bigint; total: bigint; newRealKas: bigint; newTokenReserve: bigint };
 export type CpSellQuote = { tokenIn: bigint; kasOut: bigint; creatorFee: bigint; platformFee: bigint; fee: bigint; net: bigint; newRealKas: bigint; newTokenReserve: bigint };

@@ -83,6 +83,7 @@ export function buildVestingClaim(
   release: bigint,
   opts: { tokenDust?: bigint; tokenCovid?: string } = {},
 ): CovenantSpend {
+  if (!opts.tokenCovid) throw new Error('opts.tokenCovid is required (the vested token covenant id, hex) — the relock + recipient outputs need the KIP-20 covenant binding or the tx fails on-chain');
   const total = BigInt(vestTpl.params.total);
   if (claimed < 0n || claimed >= total) throw new Error('nothing left to claim');
   const remaining = total - claimed;
@@ -132,6 +133,7 @@ export function buildVestingClaimFinal(
   claimed: bigint,
   opts: { tokenDust?: bigint; tokenCovid?: string } = {},
 ): CovenantSpend {
+  if (!opts.tokenCovid) throw new Error('opts.tokenCovid is required (the vested token covenant id, hex) — the recipient output needs the KIP-20 covenant binding or the tx fails on-chain');
   const total = BigInt(vestTpl.params.total);
   if (claimed < 0n || claimed >= total) throw new Error('nothing left to claim');
   const remaining = total - claimed;

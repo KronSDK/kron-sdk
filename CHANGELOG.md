@@ -3,6 +3,36 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.7.1
+
+### Fixed — build-time guards for footguns that produced transactions rejected on-chain
+
+A hardening pass from a community audit by **ghostDAG** (Kaspa ecosystem developer). Four builders could
+return a transaction that looked valid locally but failed at broadcast; they now fail fast at build time
+with a clear error instead. No valid caller is affected.
+
+- `curveCp.buildCpBuy` / `poolCpV3.buildPoolV3SwapKasForToken` — the `presenceWitnessIdx` parameter
+  defaulted to `0`, which is the covenant input (curve/pool P2SH). When merging the buyer's existing
+  holdings (`mergeTokens` non-empty), those tokens are presence-owned and need a co-present signed P2PK
+  funding input as their witness — pointing at input 0 (which carries no signature) failed the on-chain
+  presence check. Both now throw when `mergeTokens` is non-empty and `presenceWitnessIdx` is still 0. A
+  plain buy/swap with no merge is unaffected.
+- `curveCp.buildSplitToken` / `buildConsolidate`, `vesting.buildVestingClaim` / `buildVestingClaimFinal` —
+  `opts.tokenCovid` was optional, but without it the outputs carry no KIP-20 `CovenantBinding`, so the
+  covenant's `OpCovOutputCount` check sees zero outputs and the transfer fails on-chain. It is now required;
+  these builders throw when it is missing.
+
+### Fixed — misc
+
+- `curve.minOutWithSlippage` clamps its `bps` argument to `[0, 10000]`, so an out-of-range slippage
+  tolerance can no longer produce a negative minimum output.
+- The example wallet adapter's `getXOnlyPublicKey` now derives the x-only key correctly from an
+  **uncompressed** (65-byte) pubkey — it previously returned the trailing Y coordinate instead of X.
+  Compressed (33-byte) and raw x-only (32-byte) keys were already handled correctly.
+
+No changes to any signature script, redeem script, or output value — assembled transactions remain
+byte-identical to the reference builders. Thanks to **ghostDAG** for the report.
+
 ## 0.7.0
 
 ### Added — Kaspa provider discovery (EIP-6963-style announce/request events)

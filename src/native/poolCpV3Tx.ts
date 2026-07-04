@@ -68,6 +68,9 @@ export function buildPoolV3SwapKasForToken(
   mergeTokens: { transactionId: string; index: number; value: bigint; state: Kcc20State }[] = [],
   presenceWitnessIdx = 0, opts: { tokenDust?: bigint } = {},
 ): CovenantSpend {
+  // Merge tokens are presence-owned: their kcc20 witness MUST be a co-present signed P2PK funding input.
+  // Input 0 is the pool covenant (no signature), so the default 0 would fail the on-chain presence check.
+  if (mergeTokens.length > 0 && presenceWitnessIdx === 0) throw new Error('presenceWitnessIdx must be set to a co-present signed P2PK funding input when mergeTokens is non-empty (input 0 is the pool covenant and carries no signature)');
   const dust = opts.tokenDust ?? 1000n;
   const { kasReserve, tokenReserve, tokenCovid, totalShares, lpCovid } = utxo.state;
   const poolCovidHex = hexOf(poolCovid);

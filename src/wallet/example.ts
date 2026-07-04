@@ -70,8 +70,13 @@ export class ExampleWalletAdapter implements WalletAdapter {
     const p = provider();
     const pub: string | undefined = await p.getPublicKey?.();
     if (!pub) return null;
-    const hex = pub.replace(/^0x/, '');
-    return hex.length >= 64 ? hex.slice(-64) : null; // drop the 02/03 compression prefix -> 32-byte x-only
+    const hex = pub.replace(/^0x/, '').toLowerCase();
+    // x-only is the 32-byte X coordinate. Compressed (33B: 02/03 || X) and uncompressed (65B: 04 || X || Y)
+    // both put X right after the 1-byte prefix — take THAT, not the tail (the tail of uncompressed is Y).
+    if (hex.length === 64) return hex;                                        // already 32-byte x-only
+    if (hex.length === 66 && /^0[23]/.test(hex)) return hex.slice(2);         // compressed: drop the 02/03 prefix
+    if (hex.length === 130 && hex.startsWith('04')) return hex.slice(2, 66);  // uncompressed: X is bytes 1..33, not the trailing Y
+    return null;
   }
 
   async signMessage(message: string): Promise<{ signature: string; publicKey: string } | null> {

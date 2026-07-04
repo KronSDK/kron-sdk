@@ -135,6 +135,9 @@ export function buildCpBuy(
   if (kasIn <= 0n || kasIn % SCALE !== 0n) throw new Error('kasIn must be a positive multiple of SCALE (0.01 KAS)');
   if (tokenOut <= 0n || tokenOut >= inventory.amount) throw new Error('invalid tokenOut');
   if (inventory.amount !== utxo.state.tokenReserve) throw new Error('inventory.amount must equal the curve\'s committed tokenReserve');
+  // Merge tokens are presence-owned: their kcc20 witness MUST be a co-present signed P2PK funding input.
+  // Input 0 is the curve covenant (no signature), so the default 0 would fail the on-chain presence check.
+  if (mergeTokens.length > 0 && presenceWitnessIdx === 0) throw new Error('presenceWitnessIdx must be set to a co-present signed P2PK funding input when mergeTokens is non-empty (input 0 is the curve covenant and carries no signature)');
   const dust = opts.tokenDust ?? 1000n;
   const curveCovidHex = hexOf(curveCovid);
   const tokenCovidHex = hexOf(utxo.state.tokenCovid);
@@ -313,6 +316,7 @@ export function buildSplitToken(
   sellerToken: { transactionId: string; index: number; value: bigint; state: Kcc20State },
   sellAmount: bigint, presenceWitnessIdx: number, opts: { tokenDust?: bigint; tokenCovid?: string } = {},
 ): CovenantSpend {
+  if (!opts.tokenCovid) throw new Error('opts.tokenCovid is required (the token covenant id, hex) — both outputs need the KIP-20 covenant binding or the assembled tx fails on-chain');
   const change = sellerToken.state.amount - sellAmount;
   if (sellAmount <= 0n || change <= 0n) throw new Error('split requires 0 < sellAmount < the UTXO amount');
   const dust = opts.tokenDust ?? 1000n;
@@ -343,6 +347,7 @@ export function buildConsolidate(
   tokens: { transactionId: string; index: number; value: bigint; state: Kcc20State }[],
   presenceWitnessIdx: number, opts: { tokenDust?: bigint; tokenCovid?: string } = {},
 ): CovenantSpend {
+  if (!opts.tokenCovid) throw new Error('opts.tokenCovid is required (the token covenant id, hex) — the merged output needs the KIP-20 covenant binding or the assembled tx fails on-chain');
   if (tokens.length < 2) throw new Error('consolidate needs at least 2 UTXOs');
   const dust = opts.tokenDust ?? 1000n;
   const owner = tokens[0].state.ownerIdentifier;
