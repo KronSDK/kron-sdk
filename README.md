@@ -11,13 +11,13 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > (announce/request events) so any Kaspa wallet can surface itself to any dApp with no per-wallet code;
 > **0.7.1** hardened the trade builders to fail fast on a few footgun inputs (see the [CHANGELOG](CHANGELOG.md)).
 >
-> **⚠️ Upgrade from < 0.6.0.** Every earlier release built **version-0** transactions, which cannot carry
-> the covenant bindings Kaspa's covenant layer (KIP-20) requires on output — every assembled spend was
-> rejected on-chain with `script ran, but verification failed`. 0.5.0 fixed `assembleNativeTx` (v1 txs +
-> compute budgets) and the kcc20 builders; 0.6.0 finishes the job for the curve, pool/LP, and vesting
-> builders (buy/sell/graduate, swap, add/removeLiquidity, bindLp, claim) — they now attach the required
-> `CovOutput.binding` automatically. See the [CHANGELOG](CHANGELOG.md) for the migration notes if you
-> assembled transactions by hand instead of via `spend.assembleNativeTx`.
+> **⚠️ On an old pinned version? `npm install @kronsdk/kron-sdk@latest`.** Releases before 0.6.0 built
+> **version-0** transactions, which cannot carry the covenant bindings Kaspa's covenant layer (KIP-20)
+> requires on output — every assembled spend was rejected on-chain with `script ran, but verification
+> failed`. That was fixed across 0.5.0–0.6.0 (all builders now attach the required `CovOutput.binding`
+> automatically), so any current release is safe and **`@latest` is all you need** — don't pin below 0.6.0.
+> The per-version [CHANGELOG](CHANGELOG.md) migration notes only matter if you'd been assembling
+> transactions by hand instead of via `spend.assembleNativeTx`.
 
 ## Why this exists
 
@@ -47,9 +47,10 @@ npm install @kronsdk/kron-sdk@latest      # newest
 npm install @kronsdk/kron-sdk@0.7.1       # or pin an exact version for reproducible builds
 ```
 
-The package follows semver. **0.6.0 is a required upgrade for anyone building curve/pool/LP/vesting
-transactions** — see the warning above. The token-list client (`client.RegistryClient.tokenlist()`) and
-on-chain verifier (`verify.verifyTokenListEntry`) landed in **0.2.0** — see [Discover & verify tokens](#discover--verify-tokens-token-list).
+The package follows semver — **just install `@latest`**; there's no reason to pin an older release. Anything
+below 0.6.0 can't build valid curve/pool/LP/vesting transactions (see the warning above), so avoid pinning
+below it. The token-list client (`client.RegistryClient.tokenlist()`) and on-chain verifier
+(`verify.verifyTokenListEntry`) have been available since **0.2.0** — see [Discover & verify tokens](#discover--verify-tokens-token-list).
 
 ## Quickstart — quote a curve buy (Node)
 
