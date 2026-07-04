@@ -1,6 +1,6 @@
 {
   "name": "@kronsdk/kron-sdk",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Build, sign, and submit transactions against KRON's native-L1 Kaspa covenants (bonding curve + AMM pool) from any JS/TS environment — browser or Node. Reference SDK for wallet and dApp integrators.",
   "license": "MIT",
   "type": "module",
@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.0.1",
+    "kaspa-wallet-standard": "^0.1.0",
     "tsup": "^8.3.5",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"

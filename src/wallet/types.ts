@@ -22,6 +22,8 @@ export type WalletCapabilities = {
 export interface WalletAdapter {
   readonly provider: Provider;
   readonly label: string;
+  /** Wallet icon as a `data:` URI (SVG/PNG), for wallet pickers. dApps should refuse remote URLs. */
+  readonly icon?: string;
   isAvailable(): boolean;
   /** Which optional methods this adapter actually implements (vs. throws on call). */
   capabilities(): WalletCapabilities;
@@ -45,6 +47,9 @@ export interface WalletAdapter {
   /** Sign a UTF-8 message with the account key (KIP-5 Kaspa message-signing scheme — see README "Message
    *  signing"). Returns the Schnorr signature hex + the signer's x-only pubkey hex. null if unavailable. */
   signMessage?(message: string): Promise<{ signature: string; publicKey: string } | null>;
+  /** Subscribe to account switches in the wallet (empty array = user revoked/locked). Returns an
+   *  unsubscribe. Omit if the underlying wallet has no account-change events. */
+  onAccountsChanged?(handler: (accounts: string[]) => void): () => void;
   disconnect(): void;
 }
 

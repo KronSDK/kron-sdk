@@ -3,6 +3,36 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.7.0
+
+### Added — Kaspa provider discovery (EIP-6963-style announce/request events)
+
+A tiny window-event handshake so any Kaspa wallet can surface itself to any adopting dApp with **zero
+dApp-side code changes** — no more integrating wallets one at a time on either side. This SDK re-exports
+it from a new standalone, zero-dependency package,
+[`kaspa-wallet-standard`](https://github.com/kaspa-wallet-standard/kaspa-wallet-standard) — a *proposed*
+cross-ecosystem standard (headed for a KIP) that any wallet or dApp can adopt without depending on KRON.
+kron-sdk is its first adopter and re-exports the full surface, so it stays the single source of truth.
+
+- Events: `kaspa:announceProvider` (wallet → dApp, frozen `{ info, provider }` detail) and
+  `kaspa:requestProvider` (dApp → wallets, replay request). Constants
+  `KASPA_ANNOUNCE_PROVIDER_EVENT` / `KASPA_REQUEST_PROVIDER_EVENT`.
+- Types: `KaspaProviderInfo` (`uuid` per-load, `name`, `icon` data-URI, stable `rdns`),
+  `KaspaProvider` (KasWare-shaped raw surface; only `requestAccounts` mandatory — everything else is
+  capability-checked by dApps), `KaspaProviderDetail`.
+- Helpers: `announceKaspaWallet(info, provider)` (wallet side — announce now + auto-replay on every
+  request; returns unsubscribe) and `requestKaspaWallets(onAnnounce)` (dApp side — subscribe + request;
+  returns unsubscribe). Both are window-guarded no-ops in Node.
+- `WalletAdapter` gains optional `icon?: string` (data-URI, for wallet pickers) and
+  `onAccountsChanged?(handler): () => void` (account-switch subscription).
+- `docs/WALLETS.md`: new "Discovery: announce your wallet to dApps" section — payload spec, replay
+  semantics, canonical network ids, a no-dependency ~10-line raw-JS announce snippet, security notes,
+  and the compatibility contract.
+
+**Compatibility contract:** the discovery spec is frozen at publication — event names and existing
+payload fields never change; evolution is by new optional fields only. Everything in this release is
+additive: adapters and integrations built against 0.6.x work unchanged.
+
 ## 0.6.1
 
 ### Added — covenant template-version pin surfaced in the types (KRON ROADMAP 3.5)
