@@ -203,10 +203,14 @@ async function main() {
   const claimFinalSpend = kron.vesting.buildVestingClaimFinal(k, vestTpl, tokenTpl, claimVestingUtxo, claimLockedToken, vestingCovid, creatorPub, 900n, { tokenCovid: vestTokenCovidHex });
   assertBinding(claimFinalSpend.outputs[0], vestingCovidHex, 0, 'vesting claimFinal continuation');
   assertBinding(claimFinalSpend.outputs[1], vestTokenCovidHex, 1, 'vesting claimFinal recipient');
-  const claimFinalNoBind = kron.vesting.buildVestingClaimFinal(k, vestTpl, tokenTpl, claimVestingUtxo, claimLockedToken, vestingCovid, creatorPub, 900n);
-  assert(claimFinalNoBind.outputs[0].binding, 'vesting continuation must always be bound (vestingCovid is a required param)');
-  assert(claimFinalNoBind.outputs[1].binding === undefined, 'recipient output must be unbound when opts.tokenCovid is omitted');
-  console.log('   OK — vesting continuation always bound; token outputs bound when opts.tokenCovid is passed, unbound otherwise');
+  // 0.7.1 (ghostDAG audit #2): opts.tokenCovid is now REQUIRED. Omitting it used to leave the recipient
+  // output unbound, which always fails on-chain (OpCovOutputCount sees 0 bound outputs) — so the builder
+  // now rejects it up front instead of returning an un-broadcastable spend.
+  let threwNoBind = false;
+  try { kron.vesting.buildVestingClaimFinal(k, vestTpl, tokenTpl, claimVestingUtxo, claimLockedToken, vestingCovid, creatorPub, 900n); }
+  catch { threwNoBind = true; }
+  assert(threwNoBind, 'buildVestingClaimFinal must throw when opts.tokenCovid is omitted (required since 0.7.1)');
+  console.log('   OK — vesting outputs bound when opts.tokenCovid is passed; builder now throws when it is omitted');
 
   console.log('4. Full-tx assembly (spend.assembleNativeTx) + signPskt-style local signing...');
   const fundingEntry = {
