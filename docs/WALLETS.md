@@ -66,7 +66,7 @@ in KRON's (and any adopting dApp's) wallet picker automatically — no dApp-side
 waiting on us. The mechanism is an EIP-6963-style window-event handshake (see
 [`src/wallet/discovery.ts`](../src/wallet/discovery.ts) for the full types):
 
-- **`kaspa:announceProvider`** — you dispatch this `CustomEvent` on `window`; its frozen `detail` is
+- **`kaspa:provider`** — you dispatch this `CustomEvent` on `window`; its frozen `detail` is
   `{ info, provider }`.
 - **`kaspa:requestProvider`** — dApps dispatch this to ask present wallets to re-announce; you replay
   your announce whenever you hear it.
@@ -92,7 +92,7 @@ only mandatory method; `getAccounts`, `getNetwork`/`switchNetwork`, `getPublicKe
 `signPskt({ txJsonString, options: { signInputs } })`, `disconnect`, and `on/removeListener` are all
 optional and capability-checked by dApps. A wallet that only implements `requestAccounts` still shows up
 and connects — KRON just disables trading/comments until the corresponding methods exist. Canonical
-network ids: `kaspa_mainnet`, `kaspa_testnet_10`, `kaspa_testnet_11`, `kaspa_devnet`.
+network ids (KIP-12 canonical, the node's own): `mainnet`, `testnet-10`, `testnet-11`, `devnet`.
 
 No build step / no SDK dependency required — the raw equivalent is ~10 lines:
 
@@ -101,7 +101,7 @@ const detail = Object.freeze({
   info: Object.freeze({ uuid: crypto.randomUUID(), name: 'YourWallet', icon: 'data:…', rdns: 'com.yourwallet' }),
   provider: window.yourwallet,
 });
-const announce = () => window.dispatchEvent(new CustomEvent('kaspa:announceProvider', { detail }));
+const announce = () => window.dispatchEvent(new CustomEvent('kaspa:provider', { detail }));
 window.addEventListener('kaspa:requestProvider', announce);
 announce();
 ```
@@ -129,19 +129,16 @@ hardcoded detection (e.g. KRON's built-in `window.kasware` sniffing) stays; wall
 
 ## Ecosystem context
 
-There is currently **no official Kaspa standard** for dApp↔wallet transaction signing (no equivalent of
-Ethereum's EIP-1193/WalletConnect) or for multi-wallet auto-discovery — the `kaspa:announceProvider`
-events above are this package's EIP-6963-inspired proposal, adoptable by any wallet/dApp pair, not a
-ratified KIP. The one
-piece of the signing story that *is* an official, accepted [Kaspa Improvement
-Proposal](https://github.com/kaspanet/kips) is message signing —
-[KIP-5](https://github.com/kaspanet/kips/blob/master/kip-0005.md) specifies
+The discovery + provider contract above **is [KIP-12](https://github.com/kaspanet/kips/pull/21)** — the
+Kaspa wallet provider and discovery standard (draft, under active revival with the original authors).
+The KIP is the authoritative specification; this SDK implements it directly, so integrating against
+this document is integrating against the standard. Message signing is separately covered by the
+accepted [KIP-5](https://github.com/kaspanet/kips/blob/master/kip-0005.md) —
 `schnorr_sign(blake2b(message, digest_size=32, key='PersonalMessageSigningHash'), privateKey)`. This
 package's `signMessage` flow goes through the Kaspa WASM SDK's own `signMessage`/`verifyMessage` (which
 implements KIP-5), so it should be compliant by construction — the SDK's own round-trip is exercised in
 `scripts/smoke-test-node-wasm.mjs` step 5.
 
-The `WalletAdapter` interface itself is **not** an official standard — it's a working pattern this package
-promotes because none exists yet. If you'd find a real cross-wallet standard useful, that's a longer-horizon
-conversation worth having with Kaspa core; this package is deliberately scoped to "make integration easy
-today," not to that standardization effort.
+The `WalletAdapter` interface itself (KRON's adapter shape) is **not** part of KIP-12 — it's this SDK's
+working pattern for plugging providers into KRON specifically. The provider surface a wallet exposes to
+the *ecosystem* is the KIP-12 one above.

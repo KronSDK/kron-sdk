@@ -3,6 +3,24 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+### Changed — wallet discovery now implements KIP-12 directly (BREAKING wire values)
+
+The SDK's discovery surface (`src/wallet/discovery.ts`) is now a self-contained implementation of
+[KIP-12](https://github.com/kaspanet/kips/pull/21), the Kaspa wallet provider and discovery standard —
+the KIP is the authoritative spec. The `kaspa-wallet-standard` package dependency is removed (that
+package remains a standalone reference implementation of the same KIP; nothing depends on it here).
+
+- Export names are unchanged (`announceKaspaWallet`, `requestKaspaWallets`, `KASPA_NETWORKS`,
+  `KaspaProvider`, …) — existing imports keep compiling.
+- **Wire values are now KIP-12 canonical** (breaking if you compared against literals):
+  announce event `kaspa:provider` (was `kaspa:announceProvider`); network ids `mainnet` /
+  `testnet-10` / `testnet-11` / `devnet` (were `kaspa_`-prefixed); provider change event
+  `chainChanged` (was `networkChanged`).
+- New export: `normalizeKaspaNetworkId()` — maps `kaspa_`-prefixed dialects (e.g. KasWare's injected
+  API) to the canonical ids.
+
 ## 0.7.1
 
 ### Fixed — build-time guards for footguns that produced transactions rejected on-chain
