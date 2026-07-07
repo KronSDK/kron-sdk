@@ -78,9 +78,11 @@ import { announceKaspaWallet } from '@kronsdk/kron-sdk';
 
 announceKaspaWallet(
   {
-    uuid: crypto.randomUUID(),        // fresh per page load
+    id: 'your-extension-id',          // wallet identifier (KIP-12 `id`)
     name: 'YourWallet',
     icon: 'data:image/svg+xml;base64,…', // data: URI only — dApps refuse remote URLs
+    methods: ['kaspa:requestAccounts', 'kaspa:chainId', 'kaspa:signPskt'], // wire methods you serve
+    uuid: crypto.randomUUID(),        // fresh per page load
     rdns: 'com.yourwallet',           // STABLE id — enables silent session restore after reload
   },
   provider,                            // your injected provider object (see KaspaProvider)
@@ -98,7 +100,11 @@ No build step / no SDK dependency required — the raw equivalent is ~10 lines:
 
 ```js
 const detail = Object.freeze({
-  info: Object.freeze({ uuid: crypto.randomUUID(), name: 'YourWallet', icon: 'data:…', rdns: 'com.yourwallet' }),
+  info: Object.freeze({
+    id: 'your-extension-id', name: 'YourWallet', icon: 'data:…',
+    methods: ['kaspa:requestAccounts', 'kaspa:chainId', 'kaspa:signPskt'],
+    uuid: crypto.randomUUID(), rdns: 'com.yourwallet',
+  }),
   provider: window.yourwallet,
 });
 const announce = () => window.dispatchEvent(new CustomEvent('kaspa:provider', { detail }));
@@ -120,10 +126,11 @@ picker — a handy smoke test.)
   the inputs listed in `signInputs`**, and run the covenant-input acceptance test before enabling
   `signPskt`.
 
-**Compatibility contract.** This spec is frozen at publication: the two event names and all existing
-payload fields never change; evolution is by new *optional* fields only. SDK-wise, everything in this
-release is additive (a new module + optional interface fields) — adapters and integrations built against
-0.6.x continue to work unchanged. Wallets that never adopt the announce events lose nothing: dApp-side
+**Compatibility contract.** The two event names never change; the payload shape follows
+[KIP-12](https://github.com/kaspanet/kips/pull/21) — the KIP is where any new field comes from.
+dApp-side handling stays lenient: an announce missing the newer info fields (`id`, `methods`) is still
+surfaced, so wallets built against earlier snippets keep working at runtime — bring the fields along
+when you next touch your announce code. Wallets that never adopt the announce events lose nothing: dApp-side
 hardcoded detection (e.g. KRON's built-in `window.kasware` sniffing) stays; wallets that both announce
 *and* are built-in are deduped by the dApp (KRON dedupes by provider object identity).
 

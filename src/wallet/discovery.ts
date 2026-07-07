@@ -4,12 +4,12 @@
 // THE KIP IS THE AUTHORITATIVE SPECIFICATION. This module implements it directly and is
 // self-contained (zero dependencies): the canonical announce event `kaspa:provider`, the node's bare
 // network ids (`mainnet`, `testnet-10`, …), and the `chainChanged` provider event. The types below
-// match the KIP's formal interfaces (kip-0012/interfaces.ts); the export names are kron-sdk API
-// surface and are unchanged from earlier releases — only the wire values moved to KIP-12 canonical.
-// See docs/WALLETS.md for integration guidance.
+// follow the KIP's provider model plus a few de-facto extras (marked as such) that the spec leaves
+// to vendor extensions; the export names are kron-sdk API surface and are unchanged from earlier
+// releases — only the wire values moved to KIP-12 canonical. See docs/WALLETS.md for guidance.
 
 // ============================================================================================
-// Network identifiers (KIP-12 §5)
+// Network identifiers (KIP-12)
 // ============================================================================================
 
 /** Canonical network ids — the node's own strings, per KIP-12. */
@@ -28,7 +28,7 @@ export const normalizeKaspaNetworkId = (id: string): string =>
   id.startsWith('kaspa_') ? id.slice('kaspa_'.length).replace(/_/g, '-') : id;
 
 // ============================================================================================
-// Discovery handshake (KIP-12 §2)
+// Discovery handshake (KIP-12)
 // ============================================================================================
 
 /** Dispatched on `window` by a dApp to ask all present wallets to (re-)announce themselves. */
@@ -38,35 +38,42 @@ export const KASPA_ANNOUNCE_PROVIDER_EVENT = 'kaspa:provider';
 
 /** Identity a wallet announces about itself. `name`/`icon` are DISPLAY hints — never trust signals. */
 export type KaspaProviderInfo = {
-  /** UUIDv4, freshly generated per page load — instance identity, used only for dedupe. */
-  uuid: string;
+  /** Wallet identifier (KIP-12 `id`, e.g. the extension id). */
+  id: string;
   /** Human-readable wallet name shown in pickers, e.g. "Kastle". */
   name: string;
-  /** Wallet icon as a `data:` URI (SVG/PNG) — dApps MUST refuse remote URLs (KIP-12 § Security). */
+  /** Wallet icon as a `data:` URI (SVG/PNG) — dApps MUST refuse remote URLs (KIP-12 Security Considerations). */
   icon: string;
+  /** The KIP-12 wire methods this wallet serves, e.g. "kaspa:requestAccounts", "kaspa:signPskt" —
+   *  capability advertisement before the user ever connects. */
+  methods: readonly string[];
+  /** UUIDv4, freshly generated per page load — instance identity, used only for dedupe. */
+  uuid: string;
   /** Reverse-DNS identifier, e.g. "com.kasware" — STABLE across page loads; enables session restore. */
   rdns?: string;
 };
 
 /** One input a wallet is asked to sign, by position. `sighashType` 1 = SIGHASH_ALL; a wallet MUST
- *  refuse a type it does not implement rather than guess (KIP-12 §4.1). */
+ *  refuse a type it does not implement rather than guess (KIP-12 covenant-signing rules). */
 export type KaspaSignInput = { index: number; sighashType: number };
 
 /**
- * The provider surface a wallet exposes (KIP-12 §3). Only `requestAccounts` is REQUIRED; everything
+ * The provider surface a wallet exposes (KIP-12). Only `requestAccounts` is REQUIRED; everything
  * else is OPTIONAL and MUST be capability-checked by the dApp before use.
  *
- * FUND-SAFETY (KIP-12 §4.1): `signPskt` MUST sign ONLY the inputs listed in `options.signInputs`
+ * FUND-SAFETY (KIP-12 covenant-signing rules): `signPskt` MUST sign ONLY the inputs listed in `options.signInputs`
  * and MUST leave every other input untouched — covenant transactions carry pre-authorized inputs
  * that must not be re-signed.
  */
 export interface KaspaProvider {
   /** Connect: prompt the user if needed; resolve to the authorized address list (active first). */
   requestAccounts(): Promise<string[]>;
-  /** Already-authorized accounts WITHOUT prompting (empty if none) — silent session restore. */
+  /** Already-authorized accounts WITHOUT prompting (empty if none) — silent session restore.
+   *  De-facto extension, not part of KIP-12. */
   getAccounts?(): Promise<string[]>;
   /** Current network id (canonical, see {@link KASPA_NETWORKS}). */
   getNetwork?(): Promise<string>;
+  /** De-facto extension, not part of KIP-12 (dApps treat it as best-effort). */
   switchNetwork?(networkId: string): Promise<void>;
   /** Active account public key hex (compressed 33-byte or x-only 32-byte — both accepted). */
   getPublicKey?(): Promise<string>;
@@ -74,8 +81,10 @@ export interface KaspaProvider {
   signMessage?(message: string): Promise<string>;
   /** Sign ONLY the listed inputs of a Kaspa Safe-JSON transaction; returns the signed Safe-JSON. */
   signPskt?(arg: { txJsonString: string; options: { signInputs: KaspaSignInput[] } }): Promise<string>;
+  /** The `origin` parameter is a de-facto extension — KIP-12's disconnect takes no arguments. */
   disconnect?(origin?: string): Promise<void>;
-  /** `chainChanged` is the KIP-12 network-change event (payload: canonical network id). */
+  /** `chainChanged` is the KIP-12 network-change event (payload: canonical network id);
+   *  `accountsChanged` is a de-facto extension. */
   on?(event: 'accountsChanged' | 'chainChanged', handler: (...args: any[]) => void): void;
   removeListener?(event: string, handler: (...args: any[]) => void): void;
 }
@@ -85,7 +94,7 @@ export type KaspaProviderDetail = { info: KaspaProviderInfo; provider: KaspaProv
 
 /**
  * WALLET SIDE — call once when your content script loads. Announces immediately AND replays on every
- * `kaspa:requestProvider` (KIP-12 §2: a wallet MUST do both — replying only to requests leaves it
+ * `kaspa:requestProvider` (KIP-12: a wallet MUST do both — replying only to requests leaves it
  * invisible to a dApp that asked before it injected). Returns an unsubscribe. No-op outside a window.
  */
 export function announceKaspaWallet(info: KaspaProviderInfo, provider: KaspaProvider): () => void {
@@ -99,7 +108,7 @@ export function announceKaspaWallet(info: KaspaProviderInfo, provider: KaspaProv
 }
 
 /** An icon is safe to render only as an inline `data:` URI — a remote URL is a tracking/spoofing
- *  vector (KIP-12 § Security), so the dApp-side handshake refuses it. */
+ *  vector (KIP-12 Security Considerations), so the dApp-side handshake refuses it. */
 const isSafeIcon = (icon: unknown): icon is string =>
   typeof icon === 'string' && /^data:/i.test(icon.trim());
 
@@ -109,7 +118,7 @@ const isSafeIcon = (icon: unknown): icon is string =>
  * the subscription alive for the page lifetime to catch late-injecting wallets. Returns an
  * unsubscribe. Malformed announces are dropped; a non-`data:` icon is STRIPPED to `''` before the
  * announce reaches your callback (the wallet is still surfaced). Neither filter authenticates the
- * announcer — the user's explicit connect gesture is the trust boundary (KIP-12 § Security).
+ * announcer — the user's explicit connect gesture is the trust boundary (KIP-12 Security Considerations).
  * No-op outside a window context.
  */
 export function requestKaspaWallets(onAnnounce: (detail: KaspaProviderDetail) => void): () => void {

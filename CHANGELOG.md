@@ -20,6 +20,10 @@ package remains a standalone reference implementation of the same KIP; nothing d
   `chainChanged` (was `networkChanged`).
 - New export: `normalizeKaspaNetworkId()` — maps `kaspa_`-prefixed dialects (e.g. KasWare's injected
   API) to the canonical ids.
+- **`KaspaProviderInfo` now requires `id` and `methods`** — KIP-12's required announce fields
+  (`methods` advertises the wire methods a wallet serves before the user ever connects). Wallets
+  announcing through `announceKaspaWallet()` must supply both; dApp-side `requestKaspaWallets()`
+  stays lenient and still surfaces announces without them.
 
 ## 0.7.1
 
