@@ -3,7 +3,7 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
-## Unreleased
+## 0.8.0
 
 ### Changed — wallet discovery now implements KIP-12 directly (BREAKING wire values)
 

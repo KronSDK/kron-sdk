@@ -4,12 +4,14 @@
 — a bonding-curve launchpad + AMM DEX — from any JS/TS environment.** Browser or Node. No custody, ever:
 this package only *builds* transactions; a wallet (yours, or your user's) signs them.
 
-> **Status: v0.7.1, testnet (TN10).** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.8.0, testnet (TN10).** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract and how to
 > adapt it to a specific wallet's injected provider. **0.7.0** added cross-wallet **provider discovery**
 > (announce/request events) so any Kaspa wallet can surface itself to any dApp with no per-wallet code;
-> **0.7.1** hardened the trade builders to fail fast on a few footgun inputs (see the [CHANGELOG](CHANGELOG.md)).
+> **0.7.1** hardened the trade builders to fail fast on a few footgun inputs; **0.8.0** cut the discovery
+> surface over to [KIP-12](https://github.com/kaspanet/kips/pull/21) canonical wire values and announce
+> fields (breaking if you compared against the old literals — see the [CHANGELOG](CHANGELOG.md)).
 >
 > **⚠️ On an old pinned version? `npm install @kronsdk/kron-sdk@latest`.** Releases before 0.6.0 built
 > **version-0** transactions, which cannot carry the covenant bindings Kaspa's covenant layer (KIP-20)
@@ -52,7 +54,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.7.1       # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.8.0       # or pin an exact version for reproducible builds
 ```
 
 The package follows semver — **just install `@latest`**; there's no reason to pin an older release. Anything
