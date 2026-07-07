@@ -7,6 +7,10 @@ This guide is for anyone integrating KRON — wallets, Telegram bots, explorers,
 running examples are framed around a **wallet extension** and a **Telegram bot** because those are the two
 most common shapes, but every primitive here is general-purpose.
 
+> **Building transfer / buy / sell / swap transactions?** See **[BUILDING-TRADES.md](BUILDING-TRADES.md)**
+> for the end-to-end flow — which call goes to the backend (compile) vs. the SDK (assemble), and the
+> per-trade sequence.
+
 ---
 
 ## 1. Mental model (read this first)
