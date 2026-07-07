@@ -80,7 +80,13 @@ export class IndexerClient {
   ohlc(tick: string, opts: { interval: string; from?: number; to?: number }): Promise<Ohlc[]> {
     return fetchJson(`${this.baseUrl}/token/${encodeURIComponent(tick)}/ohlc${qs(opts)}`);
   }
-  addressTrades(address: string): Promise<Trade[]> { return fetchJson(`${this.baseUrl}/address/${encodeURIComponent(address)}/trades`); }
+  addressTrades(address: string, opts: { offset?: number; limit?: number } = {}): Promise<Trade[]> {
+    return fetchJson(`${this.baseUrl}/address/${encodeURIComponent(address)}/trades${qs(opts)}`);
+  }
+  /** One address's trade history on ONE token (a wallet's per-token history view). */
+  tokenAddressTrades(tick: string, address: string, opts: { offset?: number; limit?: number } = {}): Promise<Trade[]> {
+    return fetchJson(`${this.baseUrl}/token/${encodeURIComponent(tick)}/address/${encodeURIComponent(address)}/trades${qs(opts)}`);
+  }
 
   poolhead(tick: string): Promise<PoolHead> { return fetchJson(`${this.baseUrl}/token/${encodeURIComponent(tick)}/poolhead`); }
 

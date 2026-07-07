@@ -3,6 +3,17 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.9.0
+
+### Added
+- **Per-token wallet history** — `client.IndexerClient.tokenAddressTrades(tick, address, opts?)` wraps the
+  new `GET /token/{tick}/address/{address}/trades` indexer endpoint: one address's trade history on one
+  token (the token-detail history view a wallet shows its user). Paginated via `offset`/`limit`.
+
+### Fixed
+- `IndexerClient.addressTrades` now accepts optional `{ offset, limit }` pagination (the backend always
+  supported it; the client method previously dropped it).
+
 ## 0.8.0
 
 ### Changed — wallet discovery now implements KIP-12 directly (BREAKING wire values)

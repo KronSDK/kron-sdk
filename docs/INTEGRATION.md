@@ -170,7 +170,8 @@ transfer or sell (see §5) — `kron-sdk`'s builders consume this shape directly
 GET /v1/kcc20/token/{tick}/holders
 GET /v1/kcc20/token/{tick}/trades?offset=&limit=
 GET /v1/kcc20/token/{tick}/ohlc?interval=1h&from=&to=     # candlesticks
-GET /v1/kcc20/address/{address}/trades                    # an address's trade history
+GET /v1/kcc20/address/{address}/trades?offset=&limit=     # an address's trade history (all tokens)
+GET /v1/kcc20/token/{tick}/address/{address}/trades?offset=&limit=  # one address's history on ONE token
 ```
 
 ### Pool state (post-graduation swaps)
