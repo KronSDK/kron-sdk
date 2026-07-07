@@ -38,6 +38,14 @@ that launch a *new* curve, pool, or token — see "What's in the box" below.
 npm install @kronsdk/kron-sdk
 ```
 
+## Docs
+
+- **[docs/BUILDING-TRADES.md](docs/BUILDING-TRADES.md)** — end-to-end transfer / buy / sell / swap: which
+  call goes to the backend (compile) vs. the SDK (assemble), and the per-trade sequence. **Start here for
+  trading.**
+- **[docs/INTEGRATION.md](docs/INTEGRATION.md)** — the full integration surface: endpoints, clients, data shapes.
+- **[docs/WALLETS.md](docs/WALLETS.md)** — the wallet provider + discovery contract (KIP-12) and how to adapt it.
+
 ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for why.
 
 **Updating.** Already installed? Pull the latest published release:
