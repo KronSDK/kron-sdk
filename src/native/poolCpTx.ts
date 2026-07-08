@@ -39,9 +39,6 @@ type Spk = any;
 export const POOL_CP_SELECTOR = { swapKasForToken: 0, swapTokenForKas: 1, addLiquidity: 2, removeLiquidity: 3, bindLp: 4 } as const;
 /** the LP-share token's FIXED total supply S_MAX (== MAX_SHARES in amm_pool_cp_v3.sil). */
 export const MAX_SHARES = 10_000_000n;
-/** the all-zero covenant id — the bindLp floor owner (unspendable) and the unbound `lpCovid` placeholder. */
-const ZERO32 = new Uint8Array(32);
-
 const padFee = (f: bigint) => (f > FEE_OUT_MIN ? f : FEE_OUT_MIN);
 const ceilDiv = (a: bigint, b: bigint) => (a + b - 1n) / b;
 const hexOf = (u8: Uint8Array): string => Array.from(u8, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -133,9 +130,14 @@ export type PoolCpSellQuote = {
   creatorOut: bigint; platformOut: bigint; net: bigint; newKas: bigint; newToken: bigint;
 };
 
-/** The voluntary share of the LP fee, in bps, that must stay in the pool (k-growth) — matches the covenant. */
-function lpRetainBps(state: PoolCpState, p: PoolCpParams): bigint {
-  return (p.lpFeeBps * (state.totalShares - p.lockedShares)) / state.totalShares;
+/** retainKas (SCALE units) kept in-pool as this trade's voluntary LP yield — BYTE-EXACT with amm_pool_cp_v3.sil's
+ *  two nested integer floors: `lpFeeUnits = kas·lpFeeBps/10000; retainKas = lpFeeUnits·(totalShares−lockedShares)/
+ *  totalShares`. Computing it in one precise step (not a pre-floored `lpFeeBps·vol/total` bps, which floors to 0 for
+ *  any pool under ≈1/lpFeeBps voluntary) is the whole fix — but the ORDER of ops must match the covenant exactly or
+ *  the quote drifts from what the VM enforces (buy: too-few tokens rejected; sell: an over-ask the VM rejects). */
+function retainKasUnits(kasUnits: bigint, state: PoolCpState, p: Pick<PoolCpParams, 'lpFeeBps' | 'lockedShares'>): bigint {
+  const lpFeeUnits = (kasUnits * p.lpFeeBps) / 10000n;
+  return (lpFeeUnits * (state.totalShares - p.lockedShares)) / state.totalShares;
 }
 
 /** Buy from the pool: spend `kasInSompi` (floored to a SCALE step) → tokenOut, retaining the voluntary LP fee in-pool. */
@@ -146,7 +148,7 @@ export function quotePoolCpBuy(state: PoolCpState, p: PoolCpParams, kasInSompi: 
   const oldK = state.kasReserve * state.tokenReserve;
   // Retain the voluntary share of THIS trade's LP fee in-pool — trade-proportional, mirroring the covenant EXACTLY:
   // (newKas − retainKas)·newToken ≥ oldK, so the most tokenOut comes from newToken = ceil(oldK / (newKas − retainKas)).
-  const retainKas = (kasInUnits * lpRetainBps(state, p)) / 10000n;
+  const retainKas = retainKasUnits(kasInUnits, state, p);
   const effKas = newKas - retainKas;
   if (effKas <= 0n) return null;
   const newToken = ceilDiv(oldK, effKas);
@@ -166,15 +168,17 @@ export function quotePoolCpSell(state: PoolCpState, p: PoolCpParams, tokenIn: bi
   if (tokenIn <= 0n) return null;
   const newToken = state.tokenReserve + tokenIn;
   const oldK = state.kasReserve * state.tokenReserve;
-  const r = lpRetainBps(state, p);
-  // The covenant requires (kasReserve − kasOut − floor(kasOut·r/1e4))·newToken ≥ oldK. Pick the LARGEST kasOut that
-  // clears it: kasOut + floor(kasOut·r/1e4) ≤ kasReserve − ceil(oldK/newToken). Closed-form start, then ±1-adjust for
-  // the floor() so we land on EXACTLY the covenant's max (never over-ask the VM rejects, never under-pay the trader).
+  // The covenant requires (kasReserve − kasOut − retainKas)·newToken ≥ oldK, where retainKas =
+  // (kasOut·lpFeeBps/10000)·volShares/totalShares (two nested floors — see retainKasUnits). Pick the LARGEST kasOut
+  // clearing it: kasOut + retainKas(kasOut) ≤ kasReserve − ceil(oldK/newToken). Approximate closed-form seed, then
+  // ±1-adjust for the floors so we land EXACTLY on the covenant's max (never over-ask the VM rejects, never under-pay).
   const effMin = ceilDiv(oldK, newToken);
   const budget = state.kasReserve - effMin;
   if (budget <= 0n) return null;
-  const g = (x: bigint) => x + (x * r) / 10000n;
-  let kasOutUnits = (budget * 10000n) / (10000n + r);
+  const g = (x: bigint) => x + retainKasUnits(x, state, p);
+  const vol = state.totalShares - p.lockedShares;
+  const denom = 10000n * state.totalShares + p.lpFeeBps * vol;   // BigInt: no int64 overflow (unlike the VM)
+  let kasOutUnits = (budget * 10000n * state.totalShares) / denom;
   while (kasOutUnits > 0n && g(kasOutUnits) > budget) kasOutUnits -= 1n;
   while (g(kasOutUnits + 1n) <= budget) kasOutUnits += 1n;
   const newKas = state.kasReserve - kasOutUnits;
@@ -376,13 +380,16 @@ export type BindLpResult = CovenantSpend & { lpCovidHex: string; lpInventoryAmou
 
 /**
  * bindLp — runs once on a freshly-graduated pool (lpCovid == ZERO, totalShares == lockedShares). Genesis-mints
- * the FIXED supply (MAX_SHARES) of the LP-share token L: the floor (lockedShares) is burned to an unspendable
- * ZERO-covid owner, the rest (MAX_SHARES − lockedShares) seeds the pool's inventory (owned by the pool covid
- * P). L carries NO minter branch → its supply is fixed forever (mint-renounced, like token A's init). The pool
- * continuation carries lpCovid = the new L genesis covid; value + reserves + totalShares are unchanged.
+ * ONLY the pool's issuable L inventory (MAX_SHARES − lockedShares), owned by the pool covid P. OPTION A: the
+ * permanently-locked floor (`lockedShares`) is NOT tokenized — it exists solely as the immutable lockedShares
+ * counter + the removeLiquidity floor guard, backed by the pool's own reserves, so there is no floor object to
+ * seize. (A ZERO-owned "burn" is not a burn: a plain input satisfies OpInputCovenantId==ZERO, so the old floor
+ * ticket was spendable — removing the object closes that at the source.) L carries NO minter branch → its
+ * supply is fixed forever (mint-renounced, like token A's init). The pool continuation carries lpCovid = the
+ * new L genesis covid; value + reserves + totalShares are unchanged.
  *
  * Inputs:  [0]=pool (lpCovid == ZERO)
- * Outputs: [0]=pool(lpCovid bound) [1]=locked floor L(ZERO-owned, lockedShares) [2]=pool L inventory(P-owned)
+ * Outputs: [0]=pool(lpCovid bound) [1]=pool L inventory(P-owned) — the SOLE L genesis output
  */
 export function buildBindLp(
   k: K, tpl: PoolCpTemplate, tokenTpl: Kcc20Template,
@@ -394,15 +401,12 @@ export function buildBindLp(
   const dust = opts.tokenDust ?? 1000n;
   const { kasReserve, tokenReserve, tokenCovid } = utxo.state;
   const inventoryAmount = MAX_SHARES - lockedShares;
-  const lpFloor = covenantIdOwned(ZERO32, lockedShares, false);              // floor → unspendable ZERO covid
-  const lpInventory = covenantIdOwned(poolCovid, inventoryAmount, false);    // inventory → pool covid P
+  const lpInventory = covenantIdOwned(poolCovid, inventoryAmount, false);    // inventory → pool covid P (the ONLY L output)
 
-  const floorSpk = kcc20Spk(k, materializeKcc20Script(tokenTpl, lpFloor));
   const invSpk = kcc20Spk(k, materializeKcc20Script(tokenTpl, lpInventory));
-  // L genesis covid = KIP-20 id over the pool UTXO outpoint (tx input 0) + the two L genesis outputs (idx 1,2).
+  // L genesis covid = KIP-20 id over the pool UTXO outpoint (tx input 0) + the SOLE L genesis output (idx 1).
   const lpCovidHex = genesisCovenantId(k, { transactionId: utxo.transactionId, index: utxo.index }, [
-    { index: 1, value: dust, scriptPublicKey: floorSpk },
-    { index: 2, value: dust, scriptPublicKey: invSpk },
+    { index: 1, value: dust, scriptPublicKey: invSpk },
   ]);
   const boundLp = covidToBytes(lpCovidHex);
 
@@ -411,7 +415,7 @@ export function buildBindLp(
   const poolValue = kasReserve * SCALE;
 
   const b = new SigScriptBuilder(k);
-  pushKcc20StateScalar(b, lpFloor); pushKcc20StateScalar(b, lpInventory);
+  pushKcc20StateScalar(b, lpInventory);
   const bindSig = b.selector(POOL_CP_SELECTOR.bindLp).redeem(curRedeem).drain();
 
   const inputs: CovInput[] = [
@@ -420,7 +424,6 @@ export function buildBindLp(
   const poolCovidHex = hexOf(poolCovid);
   const outputs: CovOutput[] = [
     { value: poolValue, scriptPublicKey: poolCpSpk(k, boundRedeem), role: 'pool', binding: { covid: poolCovidHex, authorizingInput: 0 } },
-    { value: dust, scriptPublicKey: floorSpk, role: 'lpFloor', binding: { covid: lpCovidHex, authorizingInput: 0 } },
     { value: dust, scriptPublicKey: invSpk, role: 'lpInventory', binding: { covid: lpCovidHex, authorizingInput: 0 } },
   ];
   return { kind: 'bindLp', inputs, outputs, economics: { lockedShares, inventoryAmount }, covids: { poolCovid: poolCovidHex, tokenCovid: hexOf(tokenCovid) }, lpCovidHex, lpInventoryAmount: inventoryAmount };

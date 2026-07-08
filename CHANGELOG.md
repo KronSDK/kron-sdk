@@ -3,6 +3,22 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.9.1
+
+### Fixed
+- **`poolCpTx.buildBindLp`** now genesis-mints ONLY the pool's issuable L-share inventory (the single-output
+  "Option A" shape). Previously it also minted a `lockedShares` floor balance owned by an all-zero covenant
+  id, intended as an unspendable "burn" — but a plain (non-covenant) input satisfies the covenant-id-zero
+  ownership check, so that floor balance was actually spendable. The permanently-locked floor is no longer
+  tokenized at all; it exists purely as an on-chain invariant (a counter + a withdrawal guard) backed by the
+  pool's own reserves, so there is no longer an object to seize. Matches the corresponding fix already live
+  in KRON's deployed `amm_pool_cp_v3.sil` — this SDK version is required to build a `bindLp` transaction the
+  current on-chain covenant will accept (the old two-output shape is now rejected).
+- **`quotePoolCpBuy`/`quotePoolCpSell`** now compute the voluntary-LP swap-fee retention (`retainKas`) in one
+  precise step, matching the covenant exactly. The previous formula pre-floored an intermediate basis-point
+  rate before applying it, which rounded to zero for any pool under roughly 5% voluntary liquidity (at the
+  default 20bps LP fee) — silently under-quoting the fee a swap must retain in-pool for those pools.
+
 ## 0.9.0
 
 ### Added
