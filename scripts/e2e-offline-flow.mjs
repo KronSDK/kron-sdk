@@ -154,9 +154,11 @@ async function main() {
   const bindState = { kasReserve: 2000n, tokenReserve: 50_000n, tokenCovid: swapTokenCovid, totalShares: 1000n, lpCovid: new Uint8Array(32) };
   const bindUtxo = { transactionId: '33'.repeat(32), index: 0, state: bindState, tokenUtxo: { transactionId: '33'.repeat(32), index: 1, value: 1000n } };
   const bindSpend = kron.poolCp.buildBindLp(k, poolTpl, tokenTpl, bindUtxo, bindPoolCovid, 1000n);
+  // OPTION A: bindLp mints ONLY the pool's L inventory (2 outputs). The permanently-locked floor is NOT
+  // tokenized — no ZERO-owned floor output — so there is no floor object to seize. See poolCpTx.buildBindLp.
+  assert(bindSpend.outputs.length === 2, 'bindLp must produce exactly 2 outputs (pool continuation + L inventory; no floor token)');
   assertBinding(bindSpend.outputs[0], hexOf(bindPoolCovid), 0, 'bindLp pool continuation');
-  assertBinding(bindSpend.outputs[1], bindSpend.lpCovidHex, 0, 'bindLp locked floor');
-  assertBinding(bindSpend.outputs[2], bindSpend.lpCovidHex, 0, 'bindLp pool inventory');
+  assertBinding(bindSpend.outputs[1], bindSpend.lpCovidHex, 0, 'bindLp pool inventory');
 
   const addPoolCovid = randomBytes(32);
   const addTokenCovid = randomBytes(32);
