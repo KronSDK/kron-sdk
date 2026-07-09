@@ -24,7 +24,7 @@ and are verifiable against chain, never to a compiler you'd have to trust.
 ```
 POST https://api.kron.technology/api/native/cp-template
 {
-  ...curveParams,       // creatorFeeOwner, platformFeeOwner, vKas, graduationKas, and the fee bps
+  ...curveParams,       // spread the WHOLE object verbatim — don't hand-pick fields
   tokenCovid,           // the token's covenant id
   templateVersion       // { schema, silverc } — pins the exact version (omit = current sources)
 }
@@ -33,6 +33,12 @@ POST https://api.kron.technology/api/native/cp-template
 
 `curveParams`, `tokenCovid`, and `templateVersion` all come off the token's registry record. Fetch
 them with the SDK's `RegistryClient` (or `GET https://api.kron.technology` token metadata).
+**Forward `curveParams` verbatim — don't cherry-pick fields.** Besides `creatorFeeOwner`,
+`platformFeeOwner`, `vKas`, `graduationKas` and the fee bps, the object can carry extra baked inputs
+(e.g. a `vesting` schedule for a token with a locked dev allocation). The compiled bytes — and hence
+the covenant **address** — depend on all of them, so dropping one derives the wrong address and your tx
+targets a UTXO that doesn't exist. Together with `templateVersion`, spreading the record's `curveParams`
+is what guarantees you compile the exact same script (byte-for-byte) that KRON's app and the chain use.
 **Templates are static per token — fetch once and cache.** The thing that changes every trade is the
 *live state*, below.
 
