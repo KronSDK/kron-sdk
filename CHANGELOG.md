@@ -3,6 +3,39 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.11.0
+
+### Fixed — transactions were being rejected by the node's mempool
+
+Two independent bugs, both of which produce a transaction the node refuses. Neither is a covenant problem —
+the covenant scripts were correct — so both surfaced only at submit time, and both scale with transaction
+size, meaning they reproduce on real trades and not on small test cases.
+
+- **Fee was sized off the wrong mass dimension.** Toccata mass is 3-D `{storage, compute, transient}` and the
+  node requires `fee >= normalized_mass × min-relay-feerate` for *every* dimension, where
+  `normalized_i = ceil(raw_i × compute_limit / limit_i)`. The estimator only ever computed compute mass. For
+  covenant trades transient **dominates** — the redeem scripts ride in `signatureScript`, so a curve trade
+  serializes to ~175 KB and carries ~351k normalized transient against ~229k compute, *regardless of trade
+  size*. The vendored kaspa-wasm predates this model and exposes no transient call, so it is now computed
+  directly, mirroring `transaction_estimated_serialized_size` from the consensus source. The fee is sized off
+  the largest dimension.
+  Real rejection this fixes: `transaction has 34382100 fees which is under the required amount of 35114800 for
+  normalized transient mass 351148`.
+- **Per-input compute budgets were 5× too large.** `computeBudget` is a consensus-serialized `u16` costing 100
+  grams of compute mass each, against a **500,000 cap that cannot be raised**. KRON right-sized its budgets
+  (`COVENANT_COMPUTE` 2000 → 400, `TOKEN_COMPUTE` 500 → 100) after they pushed curve transactions over that
+  cap; this SDK kept the old values. Now aligned. **This changes the serialized bytes of every covenant
+  transaction the SDK builds.**
+- `estimateNativeFee` now floors the feerate at the network minimum (100 sompi/gram, exported as
+  `MIN_RELAY_FEERATE`) instead of 1 — a lower rate can never produce a relayable transaction.
+- The mass-safety margin is now 1.2× over an exactly-mirrored mass, down from 1.5× over a guessed one.
+- New export: `estimatedSerializedSize(tx)`.
+
+### Fixed — the parity guard could not see either bug
+`verify:parity` compares what the *builders* return, but compute budgets are applied at **assembly**, so the
+divergence was structurally invisible to it — the SDK ran 2000 against KRON's 400 through every green parity
+run. Budgets are now asserted directly against the reference source, and the check is negative-tested.
+
 ## 0.10.0
 
 ### Fixed — REQUIRED for mainnet: curve trades were being rejected on-chain

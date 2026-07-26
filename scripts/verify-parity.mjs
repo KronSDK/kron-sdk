@@ -21,6 +21,7 @@ const SILVERC = `${PROJX}/silverscript/target/debug/silverc`;
 const KWASM_JS = `${KRON}/web/src/vendor/kaspa/kaspa.js`;
 const KWASM_BG = `${KRON}/web/src/vendor/kaspa/kaspa_bg.wasm`;
 const REF_CURVE = `${KRON}/web/src/native/curveCpTx.ts`;
+const REF_BUDGETS = `${KRON}/web/src/native/covenantTxV1.ts`;   // per-input compute budgets live here, not in the builders
 const REF_KCC20 = `${KRON}/web/src/native/kcc20Tx.ts`;
 const SDK_DIST = `${SDK}/dist/index.js`;
 const N = `${KRON}/covenants/native`;
@@ -38,7 +39,9 @@ const kaspa = kaspaMod; const init = kaspaMod.default;
 await init({ module_or_path: readFileSync(KWASM_BG) });
 const M = await import(pathToFileURL(REF_CURVE).href);                 // reference builders (kron monorepo)
 const { addressPresenceOwned, IDENTIFIER } = await import(pathToFileURL(REF_KCC20).href);
-const S = (await import(pathToFileURL(SDK_DIST).href)).curveCp;        // this SDK's built builders
+const SDK_MOD = await import(pathToFileURL(SDK_DIST).href);
+const S = SDK_MOD.curveCp;                                             // this SDK's built builders
+const SPEND = SDK_MOD.spend ?? SDK_MOD;                                // per-input compute budget constants
 const { COVENANT_ID } = IDENTIFIER;
 
 // --- silverc helpers (compile the CURRENT covenant templates so the check tracks the live covenant) ---
@@ -109,6 +112,23 @@ const cmp = (name, a, b) => {
 };
 
 console.log(`\nparity: SDK dist vs kron reference builders (curve template ${curveTpl.script.length}B @${curveTpl.stateStart})`);
+
+// --- per-input compute budgets ------------------------------------------------------------------
+// `computeBudget` is CONSENSUS-SERIALIZED (u16 per input, 100 grams of compute mass each) against an
+// UNRAISABLE 500_000 cap. It is applied at ASSEMBLY, not by the builders, so it never appears in the
+// spend comparison below — which is exactly how it drifted: KRON right-sized 2000/500 → 400/100 and the
+// SDK kept the old values, silently building txs that exceed the compute cap. Compared here against the
+// reference source directly (regex, not import — covenantTxV1.ts is browser-targeted).
+{
+  const ref = readFileSync(REF_BUDGETS, 'utf8');
+  const refConst = (name) => Number(ref.match(new RegExp(`export const ${name} = (\\d+)`))?.[1]);
+  for (const name of ['FUNDING_COMPUTE', 'TOKEN_COMPUTE', 'COVENANT_COMPUTE']) {
+    const want = refConst(name), got = Number(S[name] ?? SPEND[name]);
+    const eq = Number.isFinite(want) && want === got;
+    console.log(`  ${eq ? 'PASS' : 'FAIL'}  ${name} (kron ${want} / sdk ${got})`);
+    if (!eq) fails++;
+  }
+}
 {
   const inv = { transactionId: '11'.repeat(32), index: 0, value: 1000n, amount: 500000n };
   const utxo = { transactionId: ZERO_COVID, index: 0, realKas: 0n, state: { graduated: false, tokenCovid: bytesOf(TOKEN_COVID), tokenReserve: 500000n } };

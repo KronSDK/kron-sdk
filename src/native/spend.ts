@@ -27,14 +27,51 @@ type Spk = any;
 
 /** Covenant txs are KIP-20 v1 transactions (covenant outputs require tx.version >= 1). */
 export const TX_VERSION = 1;
-/** Per-input compute budget (v1): a P2PK funding input ≈ one sig op. */
+// Per-input compute budgets (v1). `computeBudget` is a CONSENSUS-SERIALIZED field and each unit costs 100
+// grams of compute mass, which is capped at 500_000 and CANNOT be raised (params.rs `with_shared_limit`).
+// KRON's redeem scripts are revealed in signatureScript and also count toward compute via tx_bytes, so
+// oversized budgets pushed every curve tx past the cap (launch 561k / sell 667k). These are right-sized to
+// match KRON's production values in `web/src/native/covenantTxV1.ts` — they MUST stay in step with it.
+/** A P2PK funding input ≈ one sig op. */
 export const FUNDING_COMPUTE = 10;
-/** Per-input compute budget (v1): a kcc20 `transfer` input (token balance / inventory / seller piece). */
-export const TOKEN_COMPUTE = 500;
-/** Per-input compute budget (v1): a curve_cp / amm_pool_cp input (the large redeem scripts). */
-export const COVENANT_COMPUTE = 2000;
+/** A kcc20 `transfer` input (~2.2KB redeem: token balance / inventory / seller piece); ≥20× over exec need. */
+export const TOKEN_COMPUTE = 100;
+/** A curve_cp / amm_pool_cp_v3 input (~150KB plain / ~217KB vested redeem); conservative headroom. */
+export const COVENANT_COMPUTE = 400;
 /** Covenant output min value (KIP-9 storage mass) — the conventional token-UTXO dust, 0.5 KAS. */
 export const COVENANT_DUST = 50_000_000n;
+
+// --- Toccata 3-D mass -----------------------------------------------------------------------------
+// Mass is {storage, compute, transient}; the node compares each dimension's NORMALIZED mass
+// (`ceil(raw × cofactor)`, cofactor_i = compute_limit / limit_i) and requires
+// fee >= normalized_mass × min-relay-feerate. Mainnet post-Toccata: compute 500k, transient 1_000_000, so
+//   cofactor_transient = 0.5  ⇒  normalized_transient = size × 4 × 0.5 = size × 2
+// The vendored kaspa-wasm predates this model and exposes NO transient call, so transient is computed here.
+export const MIN_RELAY_FEERATE = 100;                  // sompi per gram
+const TRANSIENT_BYTE_TO_MASS_FACTOR = 4n;              // consensus/core/src/constants.rs
+const COMPUTE_MASS_LIMIT = 500_000n;
+const TRANSIENT_MASS_LIMIT = 1_000_000n;               // params.rs `new_transient_mass_limit`
+
+/** Consensus-estimated serialized size, mirroring rusty-kaspa `transaction_estimated_serialized_size`
+ *  (consensus/core/src/mass/mod.rs). Hex fields are 2 chars/byte. KRON's covenant redeems ride in
+ *  signatureScript, so a curve trade serializes to ~175 KB regardless of trade size — which is exactly why
+ *  transient, not compute, is the binding fee dimension. */
+export function estimatedSerializedSize(tx: any): bigint {
+  const hexBytes = (h: any): bigint => BigInt(Math.ceil(String(h ?? '').length / 2));
+  let size = 2n + 8n + 8n + 8n + 20n + 8n + 32n + 8n; // version, #in, #out, locktime, subnetworkId, gas, payload hash, payload len
+  size += hexBytes(tx.payload);
+  for (const inp of tx.inputs ?? []) {
+    size += 32n + 4n + 8n + 8n;                        // outpoint(txid+index), sigScript len, sequence
+    size += hexBytes(inp.signatureScript);
+    if (TX_VERSION >= 1) size += 2n;                   // compute_budget (u16)
+  }
+  for (const out of tx.outputs ?? []) {
+    size += 8n + 2n + 8n;                              // value, spk version, spk len
+    size += hexBytes(out.scriptPublicKey?.script ?? out.scriptPublicKey);
+    if (out.covenant) size += 2n + 32n;                // authorizing_input (u16) + covenant_id
+  }
+  return size;
+}
 
 /** A covenant output's KIP-20 lineage: which covenant id it continues and which input authorizes it. */
 export type CovBinding = { covid: string; authorizingInput: number };
@@ -173,8 +210,13 @@ export function estimateNativeFee(k: K, networkId: string, asm: AssembledNativeT
   tx.inputs = ins2;
   let computeGrams = 0n;
   for (const inp of tx.inputs) computeGrams += BigInt(inp.computeBudget || 0) * 100n;
-  const rate = BigInt(Math.max(Math.ceil(feeRateSompiPerGram), 1));
-  const fee = ((byteMass + computeGrams) * rate * 3n) / 2n;
+  const rawTransient = estimatedSerializedSize(tx) * TRANSIENT_BYTE_TO_MASS_FACTOR;
+  const normTransient = (rawTransient * COMPUTE_MASS_LIMIT + TRANSIENT_MASS_LIMIT - 1n) / TRANSIENT_MASS_LIMIT;
+  const compute = byteMass + computeGrams;
+  const billable = compute > normTransient ? compute : normTransient;
+  // The network's minimum relay feerate is 100 sompi/gram; a lower rate can never produce a relayable tx.
+  const rate = BigInt(Math.max(Math.ceil(feeRateSompiPerGram), MIN_RELAY_FEERATE));
+  const fee = (billable * rate * 6n) / 5n; // 1.2× over an exactly-mirrored mass
   return fee > 10000n ? fee : 10000n;
 }
 

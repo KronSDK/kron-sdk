@@ -4,12 +4,13 @@
 — a bonding-curve launchpad + AMM DEX — from any JS/TS environment.** Browser or Node. No custody, ever:
 this package only *builds* transactions; a wallet (yours, or your user's) signs them.
 
-> ⚠️ **Upgrade to 0.10.0 for mainnet.** KRON is live on **Kaspa mainnet**, and every mainnet token carries
-> the dev-fund fee leg added at launch. Versions **through 0.9.1 build curve buys and sells that the
-> covenant rejects** — they omit the required dev-fund output. Pool swaps are unaffected. See the
-> [CHANGELOG](CHANGELOG.md).
+> ⚠️ **Upgrade to 0.11.0 for mainnet.** Two separate reasons, both of which produce rejected transactions:
+> versions **through 0.9.1** omit the dev-fund fee output every mainnet token requires (covenant rejection),
+> and versions **through 0.10.0** under-pay the network fee and over-declare compute budget, so the node's
+> mempool refuses them (`under the required amount … for normalized transient mass`). Both scale with
+> transaction size, so they fail on real trades rather than small tests. See the [CHANGELOG](CHANGELOG.md).
 >
-> **Status: v0.10.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.11.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract and how to
 > adapt it to a specific wallet's injected provider. **0.7.0** added cross-wallet **provider discovery**
