@@ -51,7 +51,15 @@ export type CpParams = {
   creatorFeeBps: bigint;
   platformFeeBps: bigint;
   graduationFeeBps: bigint;
+  // Dual-ABI switch: PRESENT only on dev-fund-schema tokens (hydrated from the compiler's params echo). When
+  // set, buy/sell MUST append the third fee output (buy[5]/sell[4]) or the covenant rejects the tx; when absent
+  // (old-pinned tokens) appending it would silently donate the leg — never default it.
+  devFundOwner?: Uint8Array;     // 32-byte x-only pubkey (P2PK)
+  devFundBps?: bigint;
 };
+/** The dev-fund leg baked into this template, or null for old-ABI (two-fee) tokens. */
+const devFundLeg = (p: CpParams): { owner: Uint8Array; bps: bigint } | null =>
+  p.devFundOwner && p.devFundBps != null ? { owner: p.devFundOwner, bps: p.devFundBps } : null;
 export type CpTemplate = { script: Uint8Array; stateStart: number; params: CpParams };
 export type CpCurveState = { graduated: boolean; tokenCovid: Uint8Array; tokenReserve: bigint };
 /** The live curve UTXO. `realKas` (sompi) = its value = KAS raised. */
@@ -147,6 +155,8 @@ export function buildCpBuy(
   const newToken = inventory.amount - tokenOut;
   const creatorFee = (kasIn * tpl.params.creatorFeeBps) / 10000n;
   const platformFee = (kasIn * tpl.params.platformFeeBps) / 10000n;
+  const devFund = devFundLeg(tpl.params);
+  const devFundFee = devFund ? (kasIn * devFund.bps) / 10000n : 0n;
   const mergeSum = mergeTokens.reduce((s, t) => s + t.state.amount, 0n);
 
   const inventoryOut = covenantIdOwned(curveCovid, newToken, false);
@@ -176,7 +186,9 @@ export function buildCpBuy(
     { value: padFee(creatorFee), scriptPublicKey: p2pkSpk(k, tpl.params.creatorFeeOwner), role: 'creatorFee' },
     { value: padFee(platformFee), scriptPublicKey: p2pkSpk(k, tpl.params.platformFeeOwner), role: 'platformFee' },
   ];
-  return { kind: 'buy', inputs, outputs, economics: { kasIn, tokenOut, creatorFee, platformFee, newRealKas: newKas, newTokenReserve: newToken, merged: mergeSum }, covids: { tokenCovid: tokenCovidHex } };
+  // BUY_DEV_FEE_OUT = 5 is a FIXED covenant index — on a dev-fund token the leg is required, not optional.
+  if (devFund) outputs.push({ value: padFee(devFundFee), scriptPublicKey: p2pkSpk(k, devFund.owner), role: 'devFundFee' });
+  return { kind: 'buy', inputs, outputs, economics: { kasIn, tokenOut, creatorFee, platformFee, devFundFee, newRealKas: newKas, newTokenReserve: newToken, merged: mergeSum }, covids: { tokenCovid: tokenCovidHex } };
 }
 
 // --- sell (single-token, FRACTIONAL): fold `tokenIn` from the seller's piece(s), refund kasOut, return the
@@ -213,6 +225,8 @@ export function buildCpSell(
   const newToken = inventory.amount + tokenIn;
   const creatorFee = (kasOut * tpl.params.creatorFeeBps) / 10000n;
   const platformFee = (kasOut * tpl.params.platformFeeBps) / 10000n;
+  const devFund = devFundLeg(tpl.params);
+  const devFundFee = devFund ? (kasOut * devFund.bps) / 10000n : 0n;
 
   const inventoryOut = covenantIdOwned(curveCovid, newToken, false);
   const traderChangeOut = addressPresenceOwned(traderPubkey, hasChange ? change : 1n); // dummy(1) on a full sell — covenant ignores it
@@ -238,8 +252,11 @@ export function buildCpSell(
     { value: padFee(creatorFee), scriptPublicKey: p2pkSpk(k, tpl.params.creatorFeeOwner), role: 'creatorFee' },
     { value: padFee(platformFee), scriptPublicKey: p2pkSpk(k, tpl.params.platformFeeOwner), role: 'platformFee' },
   ];
+  // SELL_DEV_FEE_OUT = 4 is a FIXED covenant index — the dev-fund output must precede the optional covid-A
+  // change (which the covenant locates by group index, so shifting it to [5] is safe).
+  if (devFund) outputs.push({ value: padFee(devFundFee), scriptPublicKey: p2pkSpk(k, devFund.owner), role: 'devFundFee' });
   if (hasChange) outputs.push({ value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, traderChangeOut)), role: 'seller', binding: { covid: tokenCovidHex, authorizingInput: 1 } });
-  return { kind: 'sell', inputs, outputs, economics: { tokenIn, kasOut, change, creatorFee, platformFee, newRealKas: utxo.realKas - kasOut, newTokenReserve: newToken }, covids: { tokenCovid: tokenCovidHex } };
+  return { kind: 'sell', inputs, outputs, economics: { tokenIn, kasOut, change, creatorFee, platformFee, devFundFee, newRealKas: utxo.realKas - kasOut, newTokenReserve: newToken }, covids: { tokenCovid: tokenCovidHex } };
 }
 
 // --- graduate: lock curve, seed the CP pool (amm_pool_cp_v3) with the 5-field PoolState (locked floor, L unbound) ---

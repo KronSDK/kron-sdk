@@ -10,6 +10,10 @@ export type CpCurveParamsRecord = {
   creatorFeeBps: number; platformFeeBps: number; graduationFeeBps: number;
   dexCreatorFeeBps: number; dexPlatformFeeBps: number;
   dexLpFeeBps?: number; poolLockedShares?: number; vestingCovid?: string;
+  // Dev-fund trade-fee leg — present on dev-fund-schema tokens (every mainnet token), absent on old-pinned
+  // ones. Forward BOTH verbatim into the cp-template request and into `CpParams`: the covenant requires the
+  // third fee output at a fixed index, so dropping them builds a tx the chain rejects.
+  devFundOwner?: string; devFundBps?: number;
 };
 
 /** Covenant version pin (template pinning, KRON ROADMAP 3.5) — stamped by the registry SERVER at

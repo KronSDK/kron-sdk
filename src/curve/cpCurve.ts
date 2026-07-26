@@ -19,6 +19,7 @@ export type CpState = {
   graduationKas: bigint;  // raised-KAS target (sompi) that unlocks graduation
   creatorFeeBps: bigint;  // e.g. 70n
   platformFeeBps: bigint; // e.g. 30n
+  devFundBps?: bigint;    // dev-fund schemas only — absent/0n on old-pinned tokens (no third fee output)
 };
 
 const ceilDiv = (a: bigint, b: bigint) => (a + b - 1n) / b;
@@ -35,8 +36,12 @@ export const DEFAULT_SLIPPAGE_BPS = 100;
 export const minOutWithSlippage = (out: bigint, bps: number): bigint =>
   out - (out * BigInt(Math.min(10000, Math.max(0, Math.round(bps))))) / 10000n;
 
-export type CpBuyQuote = { kasIn: bigint; tokenOut: bigint; creatorFee: bigint; platformFee: bigint; fee: bigint; total: bigint; newRealKas: bigint; newTokenReserve: bigint };
-export type CpSellQuote = { tokenIn: bigint; kasOut: bigint; creatorFee: bigint; platformFee: bigint; fee: bigint; net: bigint; newRealKas: bigint; newTokenReserve: bigint };
+export type CpBuyQuote = { kasIn: bigint; tokenOut: bigint; creatorFee: bigint; platformFee: bigint; devFundFee: bigint; fee: bigint; total: bigint; newRealKas: bigint; newTokenReserve: bigint };
+export type CpSellQuote = { tokenIn: bigint; kasOut: bigint; creatorFee: bigint; platformFee: bigint; devFundFee: bigint; fee: bigint; net: bigint; newRealKas: bigint; newTokenReserve: bigint };
+
+// Dev-fund leg: only dev-fund-ABI tokens (devFundBps present) carry the third padded fee output — an old-ABI
+// token must quote 0n here or the displayed total would exceed what its covenant actually charges.
+const devFundFeeOf = (s: CpState, base: bigint): bigint => (s.devFundBps && s.devFundBps > 0n ? padFee((base * s.devFundBps) / 10000n) : 0n);
 
 /** Buy: spend `kasInSompi` into the reserve (floored to a SCALE step) → tokenOut, plus the fee on top. */
 export function quoteCpBuy(s: CpState, kasInSompi: bigint): CpBuyQuote | null {
@@ -52,8 +57,9 @@ export function quoteCpBuy(s: CpState, kasInSompi: bigint): CpBuyQuote | null {
   if (tokenOut <= 0n) return null;
   const creatorFee = padFee((kasIn * s.creatorFeeBps) / 10000n);
   const platformFee = padFee((kasIn * s.platformFeeBps) / 10000n);
-  const fee = creatorFee + platformFee;
-  return { kasIn, tokenOut, creatorFee, platformFee, fee, total: kasIn + fee, newRealKas, newTokenReserve: newToken };
+  const devFundFee = devFundFeeOf(s, kasIn);
+  const fee = creatorFee + platformFee + devFundFee;
+  return { kasIn, tokenOut, creatorFee, platformFee, devFundFee, fee, total: kasIn + fee, newRealKas, newTokenReserve: newToken };
 }
 
 /** Sell: return `tokenIn` tokens to inventory → kasOut sompi (a SCALE step), minus the fee. */
@@ -69,8 +75,9 @@ export function quoteCpSell(s: CpState, tokenIn: bigint): CpSellQuote | null {
   const kasOut = kasOutUnits * SCALE;
   const creatorFee = padFee((kasOut * s.creatorFeeBps) / 10000n);
   const platformFee = padFee((kasOut * s.platformFeeBps) / 10000n);
-  const fee = creatorFee + platformFee;
-  return { tokenIn, kasOut, creatorFee, platformFee, fee, net: kasOut - fee, newRealKas: s.realKas - kasOut, newTokenReserve: newToken };
+  const devFundFee = devFundFeeOf(s, kasOut);
+  const fee = creatorFee + platformFee + devFundFee;
+  return { tokenIn, kasOut, creatorFee, platformFee, devFundFee, fee, net: kasOut - fee, newRealKas: s.realKas - kasOut, newTokenReserve: newToken };
 }
 
 /** Marginal price in sompi per token: (vKas + realKas/SCALE) · SCALE / tokenReserve. */

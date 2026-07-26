@@ -4,7 +4,12 @@
 — a bonding-curve launchpad + AMM DEX — from any JS/TS environment.** Browser or Node. No custody, ever:
 this package only *builds* transactions; a wallet (yours, or your user's) signs them.
 
-> **Status: v0.9.1, testnet (TN10).** Read paths and the covenant builders are proven byte-identical to
+> ⚠️ **Upgrade to 0.10.0 for mainnet.** KRON is live on **Kaspa mainnet**, and every mainnet token carries
+> the dev-fund fee leg added at launch. Versions **through 0.9.1 build curve buys and sells that the
+> covenant rejects** — they omit the required dev-fund output. Pool swaps are unaffected. See the
+> [CHANGELOG](CHANGELOG.md).
+>
+> **Status: v0.10.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract and how to
 > adapt it to a specific wallet's injected provider. **0.7.0** added cross-wallet **provider discovery**
@@ -15,8 +20,8 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > **0.9.0** added per-token wallet trade history (`IndexerClient.tokenAddressTrades`) plus pagination on
 > `addressTrades`; **0.9.1** fixes `buildBindLp` to match KRON's current on-chain pool covenant (the old
 > shape is now rejected on-chain) and corrects a voluntary-LP fee-quoting rounding issue in
-> `quotePoolCpBuy`/`quotePoolCpSell` for pools under ~5% voluntary liquidity — see the
-> [CHANGELOG](CHANGELOG.md).
+> `quotePoolCpBuy`/`quotePoolCpSell` for pools under ~5% voluntary liquidity; **0.10.0** adds the mainnet
+> dev-fund trade-fee leg to the curve builders and quotes — see the [CHANGELOG](CHANGELOG.md).
 >
 > **⚠️ On an old pinned version? `npm install @kronsdk/kron-sdk@latest`.** Releases before 0.6.0 built
 > **version-0** transactions, which cannot carry the covenant bindings Kaspa's covenant layer (KIP-20)

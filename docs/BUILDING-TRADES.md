@@ -37,7 +37,12 @@ them with the SDK's `RegistryClient` (or `GET https://api.kron.technology` token
 `platformFeeOwner`, `vKas`, `graduationKas` and the fee bps, the object can carry extra baked inputs
 (e.g. a `vesting` schedule for a token with a locked dev allocation). The compiled bytes — and hence
 the covenant **address** — depend on all of them, so dropping one derives the wrong address and your tx
-targets a UTXO that doesn't exist. Together with `templateVersion`, spreading the record's `curveParams`
+targets a UTXO that doesn't exist.
+
+This is not a style preference — it is how the **dev-fund fee leg** reaches the builders. Every mainnet
+token carries `devFundOwner`/`devFundBps`, and the covenant requires a matching P2PK output at a fixed
+index (`[5]` on a buy, `[4]` on a sell). Spread the whole record and the builders emit it automatically;
+cherry-pick the fields you recognise and you will build transactions the chain rejects. Together with `templateVersion`, spreading the record's `curveParams`
 is what guarantees you compile the exact same script (byte-for-byte) that KRON's app and the chain use.
 **Templates are static per token — fetch once and cache.** The thing that changes every trade is the
 *live state*, below.

@@ -415,7 +415,7 @@ to avoid building txs the chain will reject — you're free to choose different 
 | `SCALE` | `1_000_000` sompi (0.01 KAS) | curve price step |
 | `MAX_TOKEN` | `1_000_000_000` | supply ceiling (whole tokens) |
 | `MAX_FEE_BPS` | `2000` | covenant int64-safety bound on any single fee bps |
-| KRON's live defaults | 1.25% pre-grad fee, 5% graduation fee, 0.35% post-grad swap fee, 80/65/50 curve splits | See `KRON_DEFAULT_FEES` — a starting point, not a requirement |
+| KRON's live defaults | 1.25% curve trade (platform 0.90 / creator 0.25 / dev fund 0.10), 5% graduation, 1.00% post-grad swap (platform 0.70 / LP 0.20 / creator 0.10) | Read them per-token from the registry's `curveParams` — fees are **baked at launch** and differ between tokens. Never hardcode. |
 
 ---
 

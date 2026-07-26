@@ -3,6 +3,37 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.10.0
+
+### Fixed — REQUIRED for mainnet: curve trades were being rejected on-chain
+
+KRON's mainnet launch introduced a third trade-fee leg (the **dev fund**), carved out of the platform share
+so the total fee is unchanged. It is a covenant ABI change: `curve_cp` now requires a P2PK output paying
+`devFundOwner` at a **fixed** index — `[5]` on a buy, `[4]` on a sell — and validates it unconditionally.
+
+Through 0.9.1 this SDK had no knowledge of that leg. Every curve buy and sell it built was missing the
+required output and was **rejected by consensus**. Because mainnet launched with an empty registry, every
+mainnet token carries the dev-fund schema, so this affected all mainnet curve trading. Pool swaps were
+unaffected (the AMM covenant has no dev-fund leg).
+
+- **`curveCpTx.buildCpBuy` / `buildCpSell`** now emit the dev-fund output when the template carries the leg.
+  On a fractional sell the covid-A change output shifts to `[5]`, since index `[4]` is covenant-fixed.
+- **`CpParams`** gains optional `devFundOwner` / `devFundBps`. The leg is emitted **only** when both are
+  present: omitting them on a dev-fund token builds a rejected transaction, and adding them to an old-pinned
+  token silently donates the bps. Forward the registry's `curveParams` verbatim and this resolves itself.
+- **`quoteCpBuy` / `quoteCpSell`** account for the leg. Quotes now carry a `devFundFee` field and fold it
+  into `fee`/`total`/`net`; previously a buy quote under-funded the transaction it was used to build.
+- **`CpCurveParamsRecord`** (registry client) gains `devFundOwner` / `devFundBps` so the passthrough typechecks.
+
+Old-pinned (pre-dev-fund) tokens are unaffected — both shapes are covered by the parity check below.
+
+### Fixed — the guard that should have caught this
+- **`verify:parity`** was itself failing to run: its constructor arguments predated the vesting-template,
+  batch-order and dev-fund ABI changes, so `silverc` aborted with a count mismatch before any comparison
+  happened. It is updated to the current ABI and now checks buy/sell against **both** the dev-fund and the
+  legacy two-fee shapes. Note this check silently skips (exit 0) wherever the covenant toolchain is absent,
+  which includes CI — it only truly gates a release when run against a local kron checkout.
+
 ## 0.9.1
 
 ### Fixed
