@@ -22,7 +22,8 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > `addressTrades`; **0.9.1** fixes `buildBindLp` to match KRON's current on-chain pool covenant (the old
 > shape is now rejected on-chain) and corrects a voluntary-LP fee-quoting rounding issue in
 > `quotePoolCpBuy`/`quotePoolCpSell` for pools under ~5% voluntary liquidity; **0.10.0** adds the mainnet
-> dev-fund trade-fee leg to the curve builders and quotes — see the [CHANGELOG](CHANGELOG.md).
+> dev-fund trade-fee leg to the curve builders and quotes; **0.11.0** fixes network-fee estimation (transient
+> mass) and right-sizes the per-input compute budgets — see the [CHANGELOG](CHANGELOG.md).
 >
 > **⚠️ On an old pinned version? `npm install @kronsdk/kron-sdk@latest`.** Releases before 0.6.0 built
 > **version-0** transactions, which cannot carry the covenant bindings Kaspa's covenant layer (KIP-20)
@@ -65,7 +66,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.9.1       # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.11.0      # or pin an exact version for reproducible builds
 ```
 
 The package follows semver — **just install `@latest`**; there's no reason to pin an older release. Anything
@@ -81,19 +82,27 @@ import { loadKaspa } from '@kronsdk/kron-sdk/wasm';
 
 const k = await loadKaspa();
 const idx = new kron.client.IndexerClient('https://idx.kron.technology/v1/kcc20');
+const reg = new kron.client.RegistryClient('https://api.kron.technology');
 
-// 1. Read live curve state
+// 1. Live curve state comes from the INDEXER; the baked fee/curve params come from the REGISTRY.
+//    They are two different sources — the indexer's token record carries no `curveParams`.
 const token = await idx.token('ghost');
+const entry = (await reg.tokenlist()).tokens.find((t) => t.symbol.toLowerCase() === 'ghost');
+const p = entry.extensions.curveParams;
+
+// 2. Fees are BAKED PER TOKEN at launch and differ between tokens — always read them from `curveParams`,
+//    never hardcode them. `devFundBps` is absent on older tokens; `?? 0n` is the correct handling.
 const cpState = {
   realKas: BigInt(token.cpState.realKas), tokenReserve: BigInt(token.cpState.tokenReserve),
-  vKas: BigInt(token.cp?.curveParams?.vKas ?? 0), graduationKas: BigInt(token.cp?.curveParams?.graduationKas ?? 0),
-  creatorFeeBps: 25n, platformFeeBps: 100n,
+  vKas: BigInt(p.vKas), graduationKas: BigInt(p.graduationKas),
+  creatorFeeBps: BigInt(p.creatorFeeBps), platformFeeBps: BigInt(p.platformFeeBps),
+  devFundBps: BigInt(p.devFundBps ?? 0),
 };
 
-// 2. Quote a buy
-const quote = kron.curve.quoteCpBuy(cpState, 10_000_000_000n); // 100 TKAS in
+// 3. Quote a buy
+const quote = kron.curve.quoteCpBuy(cpState, 10_000_000_000n); // 100 KAS in
 if (!quote) throw new Error('quote failed — bad amount or curve state');
-console.log(`100 TKAS -> ${quote.tokenOut} tokens, fee ${quote.fee} sompi`);
+console.log(`100 KAS -> ${quote.tokenOut} tokens, fee ${quote.fee} sompi`);
 
 // 3. Build the covenant spend against the LIVE curve. `cpTemplate`/`tokenTemplate` need the target's
 //    already-compiled script bytes + state offset — read them from your indexer's UTXO data
@@ -110,7 +119,7 @@ portfolio render, "Send" button, TG bot price command, pool swap).
 
 ## Discover & verify tokens (token list)
 
-**New in this release.** KRON now publishes a [tokenlists.org](https://tokenlists.org)-shaped **token
+**Available since 0.2.0.** KRON publishes a [tokenlists.org](https://tokenlists.org)-shaped **token
 list** — one URL a wallet, explorer, or price aggregator can read to discover every KRON token and how to
 identify it, instead of hand-rolling registry calls. Covenant tokens are new to the ecosystem, so this is
 the bridge that lets existing tooling recognize them. `client.RegistryClient.tokenlist()` returns it typed.
@@ -129,7 +138,7 @@ const list = await reg.tokenlist();                 // { name, version, network,
 
 // Verify each entry against the chain before trusting it. `fetchTx` is INJECTED — the SDK ships no Kaspa
 // node client; kaspaRestFetchTx wraps the common REST shape (or pass your own node RPC / proxy).
-const fetchTx = verify.kaspaRestFetchTx('https://api-tn10.kaspa.org');
+const fetchTx = verify.kaspaRestFetchTx('https://api.kaspa.org');   // mainnet
 const safe = [];
 for (const entry of list.tokens) {
   const r = await verify.verifyTokenListEntry(entry, fetchTx);   // { ok, covenantIdPresent, reason? }
@@ -147,7 +156,8 @@ covenant-id-on-genesis check is the achievable, sufficient anti-spoof proof. Ful
 KRON pins each token to the covenant source set it was deployed under (template pinning), so future
 covenant upgrades can't strand deployed tokens. An auditor recompiling the covenant from
 `extensions.curveParams` must compile **that** version's sources (archived at
-`covenants/versions/<schema[0..12]>/` in the kron repo), not the newest ones. `null` = pre-pinning legacy
+`covenants/versions/<schema[0..12]>/` in the kron repo — private; ask us for the sources of a given
+schema), not the newest ones. `null` = pre-pinning legacy
 entry. The on-chain verifier above is version-independent and needs none of this.
 
 ## What's in the box
@@ -188,12 +198,38 @@ What this package does **not** independently verify: full VM-level execution of 
 requires the Kaspa `cli-debugger` + the private KRON repo's verifier suite, which also holds the covenant
 sources and compiler this package doesn't ship) and on-chain broadcast (no network access from a clean
 install). If you're integrating funds-critical logic, treat `scripts/e2e-offline-flow.mjs` as a smoke test,
-not a substitute for testing against TN10 yourself before going to production.
+not a substitute for a real transaction. **There is no KRON testnet** — TN10 was retired at the mainnet
+migration — so validate the write path with one small mainnet trade before shipping. Reads and transaction
+*building* need no funds: the registry, the indexer and the template-compile endpoint are all public.
+
+The strongest guarantee here is **byte-parity**: `npm run verify:parity` compiles the live covenant sources
+and asserts that this package's builders produce transactions byte-identical to KRON's production builders —
+across both the dev-fund and legacy fee ABIs — and that the per-input compute budgets match. It runs
+automatically in `prepublishOnly`. It needs the (private) KRON repo and the covenant compiler checked out
+locally, and **exits 0 with a notice when they're absent**, so a green CI run on a fork does not mean parity
+was checked.
 
 ```bash
 npm run build && node scripts/smoke-test-node-wasm.mjs   # WASM loads + basic SDK calls work in plain Node
-node scripts/e2e-offline-flow.mjs                          # offline builder-chain sanity check
+node scripts/e2e-offline-flow.mjs                        # offline builder-chain sanity check
+npm test                                                 # unit tests (quote math, token-list verify, discovery)
+npm run verify:parity                                    # byte-parity vs KRON production builders
 ```
+
+## What a trade actually costs
+
+Worth designing around, because it surprises people. A KRON covenant transaction is **large** — the redeem
+scripts are revealed in `signatureScript`, so a curve trade serializes to roughly **175 KB regardless of the
+trade amount**. Two consequences:
+
+- **Network fee ≈ 0.35 KAS per trade**, driven by transient mass (serialized size), not by trade size.
+- **Protocol fee has a floor.** Each fee leg is a separate output and Kaspa enforces a minimum output value,
+  so each is padded to 0.2 KAS — about **0.6 KAS minimum on a curve trade**, 0.4 KAS on a pool swap.
+
+All in, expect **roughly 1 KAS of fixed cost per trade whatever its size**. The headline 1.25% curve rate is
+only achieved on larger trades; a 10 KAS trade pays closer to 10%. If you surface a fee percentage in your
+UI, compute it from the quote's actual amounts (`quote.fee`, `quote.total`) rather than from the bps — the
+quote object itemises every leg. Consider a minimum trade size.
 
 ## Design notes
 
