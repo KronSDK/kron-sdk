@@ -124,10 +124,17 @@ list** — one URL a wallet, explorer, or price aggregator can read to discover 
 identify it, instead of hand-rolling registry calls. Covenant tokens are new to the ecosystem, so this is
 the bridge that lets existing tooling recognize them. `client.RegistryClient.tokenlist()` returns it typed.
 
-Because the list is **not platform-signed**, every entry is **independently verifiable against the chain** —
-it carries its `covenantId` (the canonical token id) plus a `genesisTxid` proof pointer, and
-`verify.verifyTokenListEntry` confirms the token was genuinely created on that transaction. A spoofed entry
-can't slip through, and trust is rooted in Kaspa, not in KRON's server.
+Every entry is **independently verifiable against the chain** — it carries its `covenantId` (the canonical
+token id) plus a `genesisTxid` proof pointer, and `verify.verifyTokenListEntry` confirms the token was
+genuinely created on that transaction. A spoofed entry can't slip through, and trust is rooted in Kaspa,
+not in KRON's server.
+
+The list is additionally **platform-signed** (backends since 2026-07-27): the envelope carries `variant`/
+`signature`/`publicKey` root fields, and `verify.verifyTokenListSignature` checks them — this authenticates
+list *metadata* (names, logos) against tampering between KRON and you (mirrors, CDN layers, saved copies).
+The canonical message excludes the volatile `timestamp` and **binds the query variant**, so a signed
+`?all=1` document can't be replayed as the curated default list. Pin KRON's publish key out-of-band and
+pass it as `pinnedPublicKey`; per-entry chain verification above remains the root of trust.
 
 ```ts
 import { client, verify } from '@kronsdk/kron-sdk';
@@ -144,6 +151,15 @@ for (const entry of list.tokens) {
   const r = await verify.verifyTokenListEntry(entry, fetchTx);   // { ok, covenantIdPresent, reason? }
   if (r.ok) safe.push(entry);
 }
+
+// Check the list-level platform signature (metadata integrity — additive to the per-entry check above).
+import { loadKaspa } from '@kronsdk/kron-sdk/wasm';
+const kaspa = await loadKaspa();
+const sig = verify.verifyTokenListSignature(kaspa, list, {
+  pinnedPublicKey: KRON_TOKENLIST_PUBKEY,   // pin out-of-band (docs/INTEGRATION.md); omit for trust-on-first-use
+  // expectedVariant: { all: true },        // pass the variant you actually requested (default: curated list)
+});
+if (!sig.ok) console.warn(`token list signature: ${sig.reason}`);   // sig.signed=false ⇒ older, unsigned backend
 ```
 
 `covenantId` (covid `A`) is the **token** id — what a wallet adds/tracks. `extensions.poolCovenantId`
@@ -206,8 +222,12 @@ The strongest guarantee here is **byte-parity**: `npm run verify:parity` compile
 and asserts that this package's builders produce transactions byte-identical to KRON's production builders —
 across both the dev-fund and legacy fee ABIs — and that the per-input compute budgets match. It runs
 automatically in `prepublishOnly`. It needs the (private) KRON repo and the covenant compiler checked out
-locally, and **exits 0 with a notice when they're absent**, so a green CI run on a fork does not mean parity
-was checked.
+locally, and **fails closed (exit 1) when they're absent**. Environments that legitimately lack the private
+toolchain — external forks, public CI — set `KRON_PARITY_OPTIONAL=1` to skip with a visible notice instead;
+the flag never excuses a missing `dist/` build, and is a no-op when the toolchain is present, so it cannot
+mask a real mismatch. `prepublishOnly` runs *without* the flag: a publish from a machine that cannot verify
+parity fails rather than silently passing. (This repo's own CI sets the flag — a green public CI run means
+"parity deferred to publish time", not "parity checked".)
 
 ```bash
 npm run build && node scripts/smoke-test-node-wasm.mjs   # WASM loads + basic SDK calls work in plain Node

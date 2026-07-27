@@ -15,6 +15,17 @@ jobs:
           node-version: 20
       - run: npm install
       - run: npm run typecheck
+      - run: npm test
       - run: npm run build
       - run: node scripts/smoke-test-node-wasm.mjs
       - run: node scripts/e2e-offline-flow.mjs
+      # The private kron repo + silverc compiler are not available in public CI, so parity is
+      # explicitly deferred here and enforced at publish time (prepublishOnly runs WITHOUT the flag).
+      - name: parity (toolchain absent in public CI — enforced at publish)
+        run: npm run verify:parity
+        env:
+          KRON_PARITY_OPTIONAL: "1"
+      # Public CI is guaranteed to lack the toolchain, which makes it the one place that can
+      # permanently assert the gate fails closed when the flag is absent.
+      - name: parity fails closed without the flag (regression guard)
+        run: if npm run verify:parity; then echo "expected exit 1" && exit 1; fi

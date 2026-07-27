@@ -73,13 +73,20 @@ export type TokenListEntry = {
 };
 
 /** The token-list envelope (tokenlists.org shape). `version.minor` tracks the token count so a consumer can
- *  cheaply detect list changes. */
+ *  cheaply detect list changes. Signing-enabled backends additionally carry `variant`/`signature`/`publicKey`
+ *  root fields (additive) — check them with `verify.verifyTokenListSignature`. */
 export type TokenList = {
   name: string;
   timestamp: string;
   version: { major: number; minor: number; patch: number };
   network: string;
   keywords: string[];
+  /** Present when platform-signed: the query variant the signature covers. */
+  variant?: { all: boolean; tier: string | null };
+  /** Present when platform-signed: Schnorr signature over verify.canonicalTokenListMsg (timestamp excluded). */
+  signature?: string;
+  /** Present when platform-signed: KRON's x-only signing pubkey — pin it out-of-band rather than trusting this field. */
+  publicKey?: string;
   tokens: TokenListEntry[];
 };
 

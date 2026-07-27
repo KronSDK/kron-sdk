@@ -3,8 +3,13 @@
 // This is the drift catcher: if a covenant change lands in kron without being mirrored here (or vice-versa),
 // buy/sell/graduate stop matching and this FAILS — blocking a release that would build invalid transactions.
 //
-// It needs the kron reference repo + the silverc compiler checked out locally (they are NOT public), so in any
-// environment without them (external contributors, cloud CI) it SKIPS with a clear notice and exits 0.
+// It needs the kron reference repo + the silverc compiler checked out locally (they are NOT public).
+// When they are missing this FAILS CLOSED (exit 1) — a release gate that cannot run must not report
+// success. Environments that legitimately lack the private toolchain (external forks, public CI) opt
+// out explicitly with KRON_PARITY_OPTIONAL=1, which skips with a notice and exits 0. The flag never
+// excuses a missing dist/ (that's a forgotten `npm run build`), and it is a no-op when the toolchain
+// IS present — it cannot be used to bypass a real parity mismatch. prepublishOnly runs WITHOUT the
+// flag, so publishing from a machine that can't verify parity fails instead of silently passing.
 //   • kron repo:  $KRON_REPO  (default: ../kron relative to this package)
 //   • silverc:    $KRON_REPO/../projX/silverscript/target/debug/{silverc,cli-debugger}
 // Run:  npm run verify:parity   (also runs automatically in prepublishOnly, after build)
@@ -26,11 +31,27 @@ const REF_KCC20 = `${KRON}/web/src/native/kcc20Tx.ts`;
 const SDK_DIST = `${SDK}/dist/index.js`;
 const N = `${KRON}/covenants/native`;
 
-const missing = [SILVERC, KWASM_JS, REF_CURVE, SDK_DIST].filter((p) => !existsSync(p));
+if (!existsSync(SDK_DIST)) {
+  console.error(`✗ PARITY CHECK FAILED — ${SDK_DIST.replace(SDK, '.')} not found. Run \`npm run build\` first.`);
+  console.error(`  (Parity compares BUILT output; a missing build is not a missing toolchain, so`);
+  console.error(`   KRON_PARITY_OPTIONAL does not skip this.)`);
+  process.exit(1);
+}
+const missing = [SILVERC, KWASM_JS, REF_CURVE].filter((p) => !existsSync(p));
 if (missing.length) {
-  console.log(`⚠  PARITY CHECK SKIPPED — reference toolchain not found (set KRON_REPO to the kron monorepo).`);
-  console.log(`   missing: ${missing.map((p) => p.replace(SDK, '.')).join(', ')}`);
-  process.exit(0);
+  const detail = `missing: ${missing.map((p) => p.replace(SDK, '.')).join(', ')}`;
+  if (process.env.KRON_PARITY_OPTIONAL === '1') {
+    console.log(`⚠  PARITY CHECK SKIPPED (KRON_PARITY_OPTIONAL=1) — reference toolchain not found.`);
+    console.log(`   ${detail}`);
+    console.log(`   Parity was NOT verified. It is enforced at publish time (prepublishOnly runs without this flag).`);
+    process.exit(0);
+  }
+  console.error(`✗ PARITY CHECK FAILED — reference toolchain not found and KRON_PARITY_OPTIONAL is not set.`);
+  console.error(`   ${detail}`);
+  console.error(`   Fix: set KRON_REPO=<path to the kron monorepo> (default: ../kron sibling), with silverc built`);
+  console.error(`   at <kron>/../projX/silverscript/target/debug/silverc — or, in an environment that legitimately`);
+  console.error(`   lacks the private toolchain (public CI, external fork), set KRON_PARITY_OPTIONAL=1 to skip.`);
+  process.exit(1);
 }
 
 // --- load the kaspa WASM + both builder implementations -----------------------------------------
@@ -155,6 +176,30 @@ console.log(`\nparity: SDK dist vs kron reference builders (curve template ${cur
   const utxo = { transactionId: ZERO_COVID, index: 0, realKas: BigInt(graduationKas), state: { graduated: false, tokenCovid: bytesOf(TOKEN_COVID), tokenReserve: 2500n } };
   const a = [kaspa, curveTpl, tokenTpl, poolV2Tpl, utxo, inv, bytesOf(CURVE_COVID), BigInt(POOL_LOCKED), {}];
   cmp('graduate', M.buildCpGraduate(...a), S.buildCpGraduate(...a));
+}
+
+// --- token-list canonicalizer parity (backend/tokenListSignature.mjs ↔ this SDK's verify module) --
+// The signed token list's canonical message is a byte contract between the two repos: if either copy
+// drifts, every partner's signature verification breaks. Checked with a real Schnorr round-trip using
+// the kaspa WASM already loaded above.
+{
+  const T = await import(pathToFileURL(`${KRON}/backend/tokenListSignature.mjs`).href);
+  const V = SDK_MOD.verify;
+  const doc = {
+    name: 'KRON', timestamp: '2026-01-01T00:00:00.000Z', version: { major: 1, minor: 1, patch: 2 },
+    network: 'mainnet', keywords: ['kron'], variant: { all: false, tier: null },
+    tokens: [{ network: 'mainnet', covenantId: 'aa'.repeat(32), symbol: 'TKN', name: 'Token', decimals: 0, extensions: { genesisTxid: 'cc'.repeat(32), curveParams: { vKas: 5000 } } }],
+  };
+  const eq = T.canonicalTokenListMsg(doc) === V.canonicalTokenListMsg(doc);
+  console.log(`  ${eq ? 'PASS' : 'FAIL'}  tokenlist canonicalizer byte-parity (backend ↔ SDK)`);
+  if (!eq) fails++;
+  const kp = kaspa.Keypair.random();
+  const signed = T.signTokenList(doc, { all: false, tier: null }, { kaspa, privateKey: kp.privateKey, publicKey: String(kp.xOnlyPublicKey) });
+  const ok = V.verifyTokenListSignature(kaspa, signed, { pinnedPublicKey: String(kp.xOnlyPublicKey) });
+  const tampered = V.verifyTokenListSignature(kaspa, { ...signed, tokens: [{ ...signed.tokens[0], symbol: 'EVIL' }] }, { pinnedPublicKey: String(kp.xOnlyPublicKey) });
+  const rt = ok.ok === true && tampered.ok === false;
+  console.log(`  ${rt ? 'PASS' : 'FAIL'}  tokenlist sign (backend) → verify (SDK) round-trip + tamper-fails`);
+  if (!rt) fails++;
 }
 
 console.log(`\n${fails === 0 ? '✓ PARITY OK — SDK builders are byte-identical to the covenant-verified reference' : '✗ ' + fails + ' PARITY MISMATCH(ES) — SDK has drifted from the covenant; do not publish'}`);

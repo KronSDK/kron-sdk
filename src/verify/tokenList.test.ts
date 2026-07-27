@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { verifyTokenListEntry, kaspaRestFetchTx } from './tokenList.js';
+import { verifyTokenListEntry, kaspaRestFetchTx, canonicalTokenListMsg, verifyTokenListSignature } from './tokenList.js';
+import type { SignedTokenList } from './tokenList.js';
 import type { TokenListEntry } from '../client/registryClient.js';
 
 const COVID_A = 'aa'.repeat(32);
@@ -74,5 +75,107 @@ describe('kaspaRestFetchTx', () => {
       await kaspaRestFetchTx('https://api-tn10.kaspa.org/')(TXID);
       expect(called).toBe(`https://api-tn10.kaspa.org/transactions/${TXID}?outputs=true`);
     } finally { globalThis.fetch = orig; }
+  });
+});
+
+const PUB = '18'.repeat(32);
+const signedList = (over: Partial<SignedTokenList> = {}): SignedTokenList => ({
+  name: 'KRON',
+  timestamp: '2026-07-27T00:00:00.000Z',
+  version: { major: 1, minor: 2, patch: 3 },
+  network: 'mainnet',
+  keywords: ['kron'],
+  variant: { all: false, tier: null },
+  signature: 'deadbeef',
+  publicKey: PUB,
+  tokens: [entry()],
+  ...over,
+});
+/** A fake verifyMessage that recomputes nothing — "valid" means the canonical message of the passed
+ *  document matches the canonical message the signature was "issued" for. Real crypto is covered by
+ *  scripts/verify-parity.mjs (cross-repo round-trip against backend/tokenListSignature.mjs). */
+const fakeKaspaFor = (issuedFor: SignedTokenList, expectedKey = PUB) => ({
+  verifyMessage: (a: { message: string; signature: string; publicKey: string }) =>
+    a.message === canonicalTokenListMsg(issuedFor) && a.publicKey === expectedKey,
+});
+
+describe('canonicalTokenListMsg', () => {
+  it('golden string: exact canonical bytes are a contract with backend/tokenListSignature.mjs', () => {
+    const doc: SignedTokenList = {
+      name: 'KRON', timestamp: '2026-07-27T00:00:00.000Z',
+      version: { major: 1, minor: 1, patch: 2 }, network: 'Mainnet', keywords: ['kron'],
+      variant: { all: false, tier: null }, signature: 'sig', publicKey: PUB,
+      tokens: [{ network: 'mainnet', covenantId: 'aa', symbol: 'TKN', name: 'T', decimals: 0, extensions: { genesisTxid: 'cc' } } as any],
+    };
+    expect(canonicalTokenListMsg(doc)).toBe(
+      '{"v":"KRON-TOKENLIST-1","network":"mainnet","variant":{"all":false,"tier":null},'
+      + '"version":{"major":1,"minor":1,"patch":2},'
+      + '"tokens":[{"network":"mainnet","covenantId":"aa","symbol":"TKN","name":"T","decimals":0,"extensions":{"genesisTxid":"cc"}}]}',
+    );
+  });
+
+  it('excludes the volatile timestamp and binds the variant', () => {
+    const doc = signedList();
+    expect(canonicalTokenListMsg(doc)).toBe(canonicalTokenListMsg({ ...doc, timestamp: 'tampered' }));
+    expect(canonicalTokenListMsg(doc)).not.toBe(canonicalTokenListMsg({ ...doc, variant: { all: true, tier: null } }));
+  });
+});
+
+describe('verifyTokenListSignature', () => {
+  it('verifies against a pinned key', () => {
+    const doc = signedList();
+    const r = verifyTokenListSignature(fakeKaspaFor(doc), doc, { pinnedPublicKey: PUB });
+    expect(r).toEqual({ ok: true, signed: true, keySource: 'pinned' });
+  });
+
+  it('pinned key wins: a response naming a different signer fails without calling verifyMessage', () => {
+    const doc = signedList({ publicKey: 'ff'.repeat(32) });
+    let called = false;
+    const kaspa = { verifyMessage: () => { called = true; return true; } };
+    const r = verifyTokenListSignature(kaspa, doc, { pinnedPublicKey: PUB });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/signer mismatch/);
+    expect(called).toBe(false);
+  });
+
+  it('normalizes pinned keys: 0x / 02-compressed forms match the x-only response key', () => {
+    const doc = signedList();
+    expect(verifyTokenListSignature(fakeKaspaFor(doc), doc, { pinnedPublicKey: `0x${PUB}` }).ok).toBe(true);
+    expect(verifyTokenListSignature(fakeKaspaFor(doc), doc, { pinnedPublicKey: `02${PUB}` }).ok).toBe(true);
+  });
+
+  it('falls back to the response key (trust-on-first-use) when no pin is given', () => {
+    const doc = signedList();
+    const r = verifyTokenListSignature(fakeKaspaFor(doc), doc);
+    expect(r).toEqual({ ok: true, signed: true, keySource: 'response' });
+  });
+
+  it('reports an unsigned list as signed:false, not a forgery', () => {
+    const r = verifyTokenListSignature(fakeKaspaFor(signedList()), signedList({ signature: undefined, publicKey: undefined, variant: undefined }));
+    expect(r).toEqual({ ok: false, signed: false, reason: expect.stringMatching(/unsigned/) });
+  });
+
+  it('fails closed on a signed list with no variant field', () => {
+    const r = verifyTokenListSignature(fakeKaspaFor(signedList()), signedList({ variant: undefined }), { pinnedPublicKey: PUB });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/no variant/);
+  });
+
+  it('rejects a cross-variant replay: an ?all=1 document served as the curated default', () => {
+    const doc = signedList({ variant: { all: true, tier: null } });
+    const r = verifyTokenListSignature(fakeKaspaFor(doc), doc, { pinnedPublicKey: PUB }); // expectedVariant defaults to {all:false,tier:null}
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/variant mismatch.*replay/);
+    expect(verifyTokenListSignature(fakeKaspaFor(doc), doc, { pinnedPublicKey: PUB, expectedVariant: { all: true } }).ok).toBe(true);
+  });
+
+  it('a tampered document fails and a verifyMessage throw is surfaced as a reason, never thrown', () => {
+    const doc = signedList();
+    const tampered = { ...doc, tokens: [{ ...doc.tokens[0], symbol: 'EVIL' }] };
+    expect(verifyTokenListSignature(fakeKaspaFor(doc), tampered, { pinnedPublicKey: PUB }).ok).toBe(false);
+    const throwing = { verifyMessage: () => { throw new Error('wasm not loaded'); } };
+    const r = verifyTokenListSignature(throwing, doc, { pinnedPublicKey: PUB });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/wasm not loaded/);
   });
 });
