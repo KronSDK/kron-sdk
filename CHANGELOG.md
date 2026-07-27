@@ -3,6 +3,32 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.12.0
+
+### Added — token-list platform-signature verification
+
+- `verify.verifyTokenListSignature(kaspa, list, { pinnedPublicKey?, expectedVariant? })` and
+  `verify.canonicalTokenListMsg` — verify the additive platform signature KRON's backend now attaches to
+  `GET /api/registry/tokenlist` (`variant`/`signature`/`publicKey` root fields). The canonical message
+  excludes the volatile `timestamp` and **binds the query variant**, so a signed `?all=1` document cannot be
+  replayed as the curated default list. Key policy mirrors the pool-manifest verifier: a pinned key you
+  obtained out-of-band always wins; without one the response key is used (trust-on-first-use, reported via
+  `keySource`). Never throws; unsigned lists (older backends) report `{ ok: false, signed: false }`.
+  Per-entry chain verification (`verifyTokenListEntry`) remains the root of trust — the signature
+  authenticates list *metadata* against tampering between KRON and you (mirrors, CDN layers, saved copies).
+- `TokenList` gained optional `variant` / `signature` / `publicKey` fields (additive; new types
+  `SignedTokenList`, `TokenListVariant`, `VerifySignatureResult`, `KaspaMessageVerifier`).
+
+### Changed — the release parity gate now fails closed
+
+- `verify:parity` exits **1** when the private reference toolchain is missing, instead of skipping with
+  exit 0. Environments that legitimately lack it (external forks, public CI) opt out explicitly with
+  `KRON_PARITY_OPTIONAL=1`; a missing `dist/` build always fails regardless. `prepublishOnly` runs without
+  the flag, so a publish from a machine that cannot verify parity fails rather than silently passing —
+  closing the gap that let pre-0.10 releases ship covenant-rejected builders. The parity script also now
+  asserts the token-list canonicalizer is byte-identical to the backend's (a cross-repo sign→verify
+  round-trip), and public CI runs the vitest suite plus a fail-closed regression guard.
+
 ## 0.11.0
 
 ### Fixed — transactions were being rejected by the node's mempool

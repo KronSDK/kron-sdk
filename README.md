@@ -10,7 +10,7 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > mempool refuses them (`under the required amount … for normalized transient mass`). Both scale with
 > transaction size, so they fail on real trades rather than small tests. See the [CHANGELOG](CHANGELOG.md).
 >
-> **Status: v0.11.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.12.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract and how to
 > adapt it to a specific wallet's injected provider. **0.7.0** added cross-wallet **provider discovery**
@@ -23,7 +23,9 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > shape is now rejected on-chain) and corrects a voluntary-LP fee-quoting rounding issue in
 > `quotePoolCpBuy`/`quotePoolCpSell` for pools under ~5% voluntary liquidity; **0.10.0** adds the mainnet
 > dev-fund trade-fee leg to the curve builders and quotes; **0.11.0** fixes network-fee estimation (transient
-> mass) and right-sizes the per-input compute budgets — see the [CHANGELOG](CHANGELOG.md).
+> mass) and right-sizes the per-input compute budgets; **0.12.0** adds token-list platform-signature
+> verification (`verify.verifyTokenListSignature`) and makes the release parity gate fail closed — see the
+> [CHANGELOG](CHANGELOG.md).
 >
 > **⚠️ On an old pinned version? `npm install @kronsdk/kron-sdk@latest`.** Releases before 0.6.0 built
 > **version-0** transactions, which cannot carry the covenant bindings Kaspa's covenant layer (KIP-20)
