@@ -3,6 +3,44 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.13.0
+
+### Added — partner attribution now works regardless of how you submit
+
+If you're in KRON's wallet-integrator program, **this release is required to be paid correctly.**
+
+Attribution used to be recorded by KRON's *sequencer*, at relay time. That coupled "does the partner get
+credited" to "which submission route did the wallet choose" — and the route is chosen for latency and
+reliability reasons, not accounting ones. With no contention on a token there is nothing to sequence, so a
+sensible integrator submits straight to a node, and earned **nothing**. Reported by KasWare; they were right.
+
+The tag now rides in the transaction payload, so it's part of the trade itself:
+
+```ts
+const asm = kron.spend.assembleNativeTx(k, {
+  spend, fundingEntries, changeAddress, networkFee,
+  ref: 'yourtag',            // ← on-chain attribution; works via sequencer OR direct-to-node
+});
+```
+
+- **New:** `kron.partnerTag` — `encodePartnerTag(ref)`, `parsePartnerTag(payloadHex)`, `REF_RE`, `TAG_PREFIX`.
+- **`spend.assembleNativeTx`** takes an optional `ref` and writes `kron:r:<tag>` into `tx.payload`.
+- An invalid or absent tag yields an empty payload rather than throwing — so validate against `REF_RE` at your
+  config boundary, because a silently-dropped tag earns nothing.
+- **Audit your own volume from chain**, without trusting KRON's books:
+  `GET https://idx.kron.technology/v1/kcc20/attribution?ref=<tag>`
+
+Cost is negligible: the tag is 14 bytes for a 7-character ref, ~28 normalized transient mass, about
+**0.000028 KAS** against a ~0.35 KAS network fee. No covenant reads or constrains `payload`, so this works on
+every already-deployed token — no new covenant version, nothing to migrate.
+
+The tag is unauthenticated by design (anyone can put any tag in their own transaction). It's a durable,
+publicly auditable claim, not proof of origination; KRON settles by manual review.
+
+**Still passing `ref` to `sequencerClient.submit()`/`curveSubmit()`?** Keep it — that path still records, and
+KRON merges both sources deduped by txid. But it only ever sees sequencer-routed trades, so move to the
+payload tag.
+
 ## 0.12.0
 
 ### Added — token-list platform-signature verification

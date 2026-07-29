@@ -28,7 +28,7 @@ needs to expose
   message-signing scheme.
 
 **Why this shape and not something else:** it's not an official Kaspa standard — none exists yet for
-dApp↔wallet signing (see "Ecosystem context" below). It's a working pattern proven functional on TN10:
+dApp↔wallet signing (see "Ecosystem context" below). It's a working pattern proven in production on mainnet:
 build the transaction, hand the wallet only the specific inputs that need its signature, broadcast. Any
 wallet that can sign a Kaspa PSKT-shaped transaction for specific inputs can implement this interface.
 
@@ -54,10 +54,27 @@ API mismatch.
    throw `WalletCapabilityError` if it's not yet implemented. Never guess at a signing shape you haven't
    confirmed; a plausible-looking but wrong sighash mapping produces a transaction that's silently signed
    incorrectly.
-3. Test the `signPskt` path specifically against a testnet transaction with **both** a covenant input and a
+3. Test the `signPskt` path specifically against a real transaction with **both** a covenant input and a
    user P2PK input (e.g. a KRON curve buy) — signing a plain send is not sufficient coverage, since it
    never exercises the "only sign these specific inputs, leave the rest alone" requirement that makes
-   covenant transactions work.
+   covenant transactions work. There is no KRON testnet (TN10 was retired at the mainnet migration), so
+   run this acceptance test as one small mainnet trade.
+
+## Getting paid: partner attribution
+
+If you're in KRON's wallet-integrator program ([kron.technology/wallets](https://kron.technology/wallets)),
+tag the trades your wallet builds so your volume is credited: pass your partner tag as `ref` to
+`kron.spend.assembleNativeTx` (SDK ≥ 0.13.0). The tag rides in the transaction payload, so it counts
+however the trade is submitted — through the sequencer or straight to a node — and your credited volume is
+auditable from chain at any time:
+
+```
+GET https://idx.kron.technology/v1/kcc20/attribution?ref=yourtag
+```
+
+Validate the tag against `kron.partnerTag.REF_RE` at your configuration boundary — an invalid tag is
+silently dropped (the trade still builds, untagged) and earns nothing. Full details — cost, security model,
+settlement: [BUILDING-TRADES.md § Partner attribution](BUILDING-TRADES.md#partner-attribution-integrator-program).
 
 ## Discovery: announce your wallet to dApps
 

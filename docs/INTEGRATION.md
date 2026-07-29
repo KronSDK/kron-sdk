@@ -1,7 +1,7 @@
 # KRON integration guide
 
-> Testnet (TN10) integration surface. Endpoints and shapes below are stable enough to build against; a few
-> details may still shift ahead of mainnet.
+> Mainnet integration surface. KRON is live on Kaspa **mainnet**; there is no KRON testnet (TN10 was
+> retired at the mainnet migration). Endpoints and shapes below are stable to build against.
 
 This guide is for anyone integrating KRON — wallets, Telegram bots, explorers, analytics, trading UIs. The
 running examples are framed around a **wallet extension** and a **Telegram bot** because those are the two
@@ -45,21 +45,22 @@ tx-builders (§5) — that's what this package is for.
 
 ---
 
-## 2. Network & endpoints (TN10)
+## 2. Network & endpoints (mainnet)
 
-All services are live on Kaspa **testnet-10**.
+All services are live on Kaspa **mainnet**.
 
 | Service | Base URL | Purpose |
 |---|---|---|
 | **Indexer** (KCC-20 API) | `https://idx.kron.technology` | Balances, metadata, prices, holders, pool state, history, SSE. Path prefix `/v1/kcc20`. |
 | **Backend** (registry) | `https://api.kron.technology` | Token metadata registry (name/image/links/socials), LP positions, comments, alerts. |
 | **Sequencer** | `https://seq.kron.technology` | Non-custodial batcher for hot markets: **post-graduation pool swaps** and **pre-graduation curve buys/sells** (`/curve/*`). |
-| **Node** (wRPC) | `wss://node.kron.technology` | Kaspa wRPC (borsh) over wss — UTXO set, submit tx. `testnet-10`. |
+| **Node** (wRPC) | `wss://node.kron.technology` | Kaspa wRPC (borsh) over wss — UTXO set, submit tx. `mainnet`. |
 | **Frontend** | `https://kron.technology` | Reference UI (useful for cross-checking behavior). |
 
-`network` everywhere = `testnet-10`. Mainnet endpoints will be published separately at launch — the
-`kron-sdk` REST clients take `baseUrl` as an explicit constructor argument (no baked-in default) so
-switching networks is a one-line change, not a version bump.
+`network` everywhere = `mainnet`. There is no KRON testnet — TN10 was retired at the mainnet migration —
+so validate write paths with one small real trade (see §9). The `kron-sdk` REST clients take `baseUrl` as
+an explicit constructor argument (no baked-in default), so pointing at a different deployment is a
+one-line change, not a version bump.
 
 ---
 
@@ -86,7 +87,7 @@ unless noted as SCALE units. `kron-sdk`'s `IndexerClient` unwraps this envelope 
   covid and reject impostors, without trusting any indexer.
 - **`curveCovenantId`** / **`poolCovenantId`** — the bonding-curve and (post-grad) pool covenant ids.
   `poolCovenantId` is null until graduation.
-- **`address`** — a standard `kaspa:`/`kaspatest:` address. URL-encode it in paths.
+- **`address`** — a standard `kaspa:` address. URL-encode it in paths.
 
 ### Token lifecycle
 
@@ -242,7 +243,7 @@ const reg = new client.RegistryClient('https://api.kron.technology');
 const list = await reg.tokenlist();                 // { name, version, network, tokens: [...] }
 
 // Inject a tx fetcher — the SDK ships no Kaspa node client. kaspaRestFetchTx wraps the common REST shape.
-const fetchTx = verify.kaspaRestFetchTx('https://api-tn10.kaspa.org');
+const fetchTx = verify.kaspaRestFetchTx('https://api.kaspa.org');
 const safe = [];
 for (const entry of list.tokens) {
   const r = await verify.verifyTokenListEntry(entry, fetchTx);   // { ok, covenantIdPresent, reason? }
@@ -345,7 +346,7 @@ wallet), use `kron.spend.signPsktWithKey(k, txJsonString, signInputs, privKey)` 
 
 ### Submitting
 
-Signed txs go to the Kaspa node over wRPC (`wss://node.kron.technology`, `testnet-10`) via
+Signed txs go to the Kaspa node over wRPC (`wss://node.kron.technology`, `mainnet`) via
 `submitTransaction`. Only txs accepted into the virtual (selected-parent) chain mutate indexer state, and
 the indexer commits past a confirmation depth — so expect a couple seconds before a write shows up in
 reads. Use the SSE stream to know exactly when.
@@ -387,17 +388,35 @@ id** instead of the pool P2SH:
 3. `sequencer.curveSubmit({ covid, signedTx, prevHead, declaredReserves })` → same result shape,
    including the stale-`prevHead` retry gate.
 
-### Partner attribution (`ref`)
+### Partner attribution
 
-Wallet-integrator partners (kron.technology/wallets) pass their assigned partner tag as the
-optional `ref` field on `submit()` and `curveSubmit()` — 2–32 chars of `a-z 0-9 - _`,
-case-insensitive. Each successfully relayed tagged trade is recorded server-side
-(`{ ts, market, key, txid, ref }`) as the settlement record for your revenue share, joinable
-against the indexer's per-trade feed by `txid`. A malformed tag is rejected with `400` so a
-misconfigured integration fails loudly on its first submit instead of silently at settlement; an
-absent tag is fine. **Only sequencer-routed trades carry attribution** — route trades through the
-sequencer (recommended for hot markets anyway) for them to count. The deployed sequencer
-advertises support via `health().attribution`.
+Wallet-integrator partners ([kron.technology/wallets](https://kron.technology/wallets)) tag their trades
+**in the transaction itself**: pass your assigned partner tag as the optional `ref` when you assemble
+(SDK ≥ 0.13.0):
+
+```ts
+const asm = kron.spend.assembleNativeTx(k, { spend, fundingEntries, changeAddress, networkFee, ref: 'yourtag' });
+```
+
+That writes `kron:r:<tag>` into the transaction payload, so the trade is credited **whichever route it
+takes** — sequencer or direct-to-node. Route for latency and reliability; it no longer affects whether you
+get paid. Your credited volume is auditable straight from chain, without trusting KRON's books:
+
+```
+GET https://idx.kron.technology/v1/kcc20/attribution?ref=yourtag
+→ { result: [ { ts, market, txid, ref, volume }, … ] }
+```
+
+The tag is 2–32 chars of `a-z 0-9 - _` (`kron.partnerTag.REF_RE`). Validate it at your configuration
+boundary — `assembleNativeTx` silently drops an invalid tag to an empty payload (an untaggable trade must
+still build), and a dropped tag earns nothing. Cost, security model, and settlement details:
+[BUILDING-TRADES.md § Partner attribution](BUILDING-TRADES.md#partner-attribution-integrator-program).
+
+**Legacy sequencer-side `ref` (pre-0.13.0).** The optional `ref` field on `submit()`/`curveSubmit()` still
+works — the sequencer records tagged relays, and KRON merges both attribution sources deduped by txid. But
+it structurally sees only sequencer-routed trades (that blind spot is why the payload tag exists), so treat
+it as legacy and move to the payload tag. A malformed sequencer `ref` is rejected with `400`; the deployed
+sequencer advertises the field via `health().attribution`.
 
 In both markets, direct node submission also works under low contention — the sequencer is a
 convenience for hot markets, and any sequencer-side gate should fall back to direct submission.
@@ -459,7 +478,9 @@ Complete runnable version: [`scripts/example-kcc20-send.mjs`](../scripts/example
 
 ## 9. Caveats & support
 
-- **Testnet (TN10).** This is the testnet integration surface; mainnet endpoints publish at launch.
+- **Mainnet only — no testnet.** KRON runs on Kaspa mainnet; TN10 was retired at the mainnet migration.
+  Reads and transaction *building* are free (public endpoints, no funds needed) — validate the signed
+  write path with one small real trade before shipping.
 - **Wallet signing is a documented contract, not a bundled integration** — see `docs/WALLETS.md` for the
   `WalletAdapter` interface and a generic reference implementation to adapt to your wallet's provider.
 - **Confirmation lag.** Reads reflect accepted, confirmation-buried state — expect ~seconds after a write.

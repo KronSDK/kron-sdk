@@ -93,3 +93,46 @@ Curve vs pool is decided by the token's graduation state — read it from the to
 A higher-level helper (`buildBuy(tokenId, amountKas)` etc.) that does fetch → materialize → build in a
 single call, so you don't wire these steps up by hand. Until then, the builders + clients above are
 the path.
+
+---
+
+## Partner attribution (integrator program)
+
+If you're in KRON's wallet-integrator program, tag your trades so your volume is credited. Pass your partner
+tag as `ref` when you assemble:
+
+```ts
+const asm = kron.spend.assembleNativeTx(k, {
+  spend, fundingEntries, changeAddress, networkFee,
+  ref: 'yourtag',
+});
+```
+
+That writes `kron:r:<tag>` into the transaction payload. Two things follow from it being *in the transaction*
+rather than reported at submit time:
+
+**Route freely.** The tag is captured whether you relay via the sequencer or submit straight to a node. Pick
+whichever is faster and more reliable for your users — it no longer affects whether you get paid. (Before
+`0.13.0` attribution was recorded only by the sequencer, so a wallet with no contention to sequence submitted
+direct and earned nothing.)
+
+**Verify yourself.** Your volume is readable from chain, so you never have to take KRON's word for it:
+
+```
+GET https://idx.kron.technology/v1/kcc20/attribution?ref=yourtag
+→ { result: [ { ts, market, txid, ref, volume }, … ] }
+```
+
+Notes worth knowing:
+
+- The tag must match `^[a-z0-9][a-z0-9_-]{1,31}$` (2–32 chars). An invalid tag is silently dropped to an empty
+  payload — validate with `kron.partnerTag.REF_RE` at your configuration boundary, because a dropped tag earns
+  nothing and looks identical to untagged traffic.
+- Cost is ~2 mass units per byte: a 7-character tag is about **0.000028 KAS**, against a ~0.35 KAS network fee.
+- It changes nothing on-chain about the trade itself — no covenant inspects `payload`.
+- The tag is unauthenticated: it's an auditable claim, not proof. Settlement is manual review.
+- Use the **same tag** as the one on your dashboard account — settlement joins on it.
+- Migrating from the sequencer-side `ref` field (pre-0.13.0)? It still records, and KRON merges both
+  attribution sources deduped by txid — nothing double-counts. But that path only ever sees
+  sequencer-routed trades, so the payload tag is the one that always counts; passing both during the
+  transition is safe.

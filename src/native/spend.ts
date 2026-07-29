@@ -21,6 +21,7 @@
 //
 // No top-level SDK import (only `import type`) — caller passes the loaded WASM namespace `k`.
 import type { Kaspa } from '../wasm/kaspa.types.js';
+import { encodePartnerTag } from './partnerTag.js';
 
 type K = Kaspa;
 type Spk = any;
@@ -131,9 +132,9 @@ export type AssembledNativeTx = {
  */
 export function assembleNativeTx(
   k: K,
-  opts: { spend: CovenantSpend; fundingEntries: FundingEntry[]; changeAddress: string; networkFee: bigint },
+  opts: { spend: CovenantSpend; fundingEntries: FundingEntry[]; changeAddress: string; networkFee: bigint; ref?: string },
 ): AssembledNativeTx {
-  const { spend, fundingEntries, changeAddress, networkFee } = opts;
+  const { spend, fundingEntries, changeAddress, networkFee, ref } = opts;
   const kk = k as any;
 
   const covInputs = spend.inputs.map(
@@ -177,7 +178,10 @@ export function assembleNativeTx(
     outputs,
     lockTime: 0n,
     gas: 0n,
-    payload: '',
+    // Partner attribution rides HERE, in the transaction itself — so it is captured whether the trade goes to
+    // the sequencer or straight to a node. Recording it at relay time (the old design) meant a wallet with no
+    // contention to sequence submitted direct and earned nothing. Empty string when untagged.
+    payload: encodePartnerTag(ref),
     subnetworkId: SUBNET_ZERO,
   });
   return {

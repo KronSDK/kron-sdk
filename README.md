@@ -10,7 +10,7 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > mempool refuses them (`under the required amount … for normalized transient mass`). Both scale with
 > transaction size, so they fail on real trades rather than small tests. See the [CHANGELOG](CHANGELOG.md).
 >
-> **Status: v0.12.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.13.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract and how to
 > adapt it to a specific wallet's injected provider. **0.7.0** added cross-wallet **provider discovery**
@@ -24,8 +24,9 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > `quotePoolCpBuy`/`quotePoolCpSell` for pools under ~5% voluntary liquidity; **0.10.0** adds the mainnet
 > dev-fund trade-fee leg to the curve builders and quotes; **0.11.0** fixes network-fee estimation (transient
 > mass) and right-sizes the per-input compute budgets; **0.12.0** adds token-list platform-signature
-> verification (`verify.verifyTokenListSignature`) and makes the release parity gate fail closed — see the
-> [CHANGELOG](CHANGELOG.md).
+> verification (`verify.verifyTokenListSignature`) and makes the release parity gate fail closed;
+> **0.13.0** moves partner attribution on-chain (pass `ref` to `assembleNativeTx`) so integrator trades
+> are credited regardless of submission route — see the [CHANGELOG](CHANGELOG.md).
 >
 > **⚠️ On an old pinned version? `npm install @kronsdk/kron-sdk@latest`.** Releases before 0.6.0 built
 > **version-0** transactions, which cannot carry the covenant bindings Kaspa's covenant layer (KIP-20)
@@ -57,8 +58,8 @@ npm install @kronsdk/kron-sdk
 ## Docs
 
 - **[docs/BUILDING-TRADES.md](docs/BUILDING-TRADES.md)** — end-to-end transfer / buy / sell / swap: which
-  call goes to the backend (compile) vs. the SDK (assemble), and the per-trade sequence. **Start here for
-  trading.**
+  call goes to the backend (compile) vs. the SDK (assemble), and the per-trade sequence. Also covers
+  **partner attribution** (tagging trades so integrator volume is credited). **Start here for trading.**
 - **[docs/INTEGRATION.md](docs/INTEGRATION.md)** — the full integration surface: endpoints, clients, data shapes.
 - **[docs/WALLETS.md](docs/WALLETS.md)** — the wallet provider + discovery contract (KIP-12) and how to adapt it.
 
@@ -68,7 +69,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.11.0      # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.13.0      # or pin an exact version for reproducible builds
 ```
 
 The package follows semver — **just install `@latest`**; there's no reason to pin an older release. Anything
@@ -188,6 +189,7 @@ kron-sdk
 ├─ kcc20              the KCC-20 token covenant: transfer / ownership modes / state encoding
 ├─ vesting            claim / claimFinal against an EXISTING vesting lock
 ├─ spend              tx assembly + the signPskt-style wallet-signing bridge
+├─ partnerTag         on-chain integrator attribution: encode/parse the partner tag carried in tx.payload
 ├─ wallet             WalletAdapter interface, a generic reference adapter, + cross-wallet provider discovery
 ├─ client             typed REST clients: indexer, registry (incl. tokenlist()), sequencer
 ├─ verify             verify a token-list entry against the chain (anti-spoof, fetcher-injected)
@@ -252,6 +254,25 @@ All in, expect **roughly 1 KAS of fixed cost per trade whatever its size**. The 
 only achieved on larger trades; a 10 KAS trade pays closer to 10%. If you surface a fee percentage in your
 UI, compute it from the quote's actual amounts (`quote.fee`, `quote.total`) rather than from the bps — the
 quote object itemises every leg. Consider a minimum trade size.
+
+## Partner attribution (wallet-integrator program)
+
+Integrators in KRON's [wallet partner program](https://kron.technology/wallets) earn a revenue share on the
+volume they route. Since **0.13.0** the attribution tag travels **in the transaction itself**, so trades are
+credited however you submit them — through the sequencer or straight to a node:
+
+```ts
+const asm = kron.spend.assembleNativeTx(k, {
+  spend, fundingEntries, changeAddress, networkFee,
+  ref: 'yourtag',   // your partner tag → written to tx.payload as `kron:r:yourtag`
+});
+```
+
+Audit your credited volume straight from chain —
+`GET https://idx.kron.technology/v1/kcc20/attribution?ref=yourtag` — and validate your tag with
+`kron.partnerTag.REF_RE` at your config boundary (an invalid tag is silently dropped and earns nothing).
+Costs ~0.00003 KAS per trade; no covenant logic is touched. Full details:
+[docs/BUILDING-TRADES.md § Partner attribution](docs/BUILDING-TRADES.md#partner-attribution-integrator-program).
 
 ## Design notes
 

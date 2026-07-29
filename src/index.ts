@@ -16,6 +16,9 @@ export * as curve from './curve/cpCurve.js';
 export * as sigscript from './native/sigscript.js';
 export * as genesis from './native/genesis.js';
 export * as spend from './native/spend.js';
+/** On-chain partner attribution tag (encode/parse + REF_RE). Pass `ref` to `spend.assembleNativeTx` to tag a
+ *  trade; use `parsePartnerTag` to read a tag back off a transaction payload from chain. */
+export * as partnerTag from './native/partnerTag.js';
 export * as kcc20 from './native/kcc20Tx.js';
 export * as curveCp from './native/curveCpTx.js';
 export * as poolCp from './native/poolCpTx.js';
