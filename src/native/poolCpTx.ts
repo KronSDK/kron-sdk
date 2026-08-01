@@ -314,8 +314,18 @@ export function buildAddLiquidity(
   k: K, tpl: PoolCpTemplate, tokenTpl: Kcc20Template,
   utxo: PoolCpUtxo, lpInventory: PoolLpInventoryUtxo, poolCovid: Uint8Array,
   lpDepositToken: { transactionId: string; index: number; value: bigint; state: Kcc20State },
-  lpPubkey: Uint8Array, q: AddLiquidityQuote, presenceWitnessIdx: number, opts: { tokenDust?: bigint } = {},
+  lpPubkey: Uint8Array, q: AddLiquidityQuote, presenceWitnessIdx: number,
+  opts: { tokenDust?: bigint; lpBindVerified?: boolean | null } = {},
 ): CovenantSpend {
+  // COUNTERFEIT-LP TRIPWIRE. Pools on the pre-`e5469a7ad482` covenant can be counterfeit-bound so that added
+  // liquidity is drained by counterfeit shares (see IndexerClient.CpState.lpBindVerified / assertLpBindSafe).
+  // This builder is pure and cannot verify the L-share supply itself (that needs the indexer), so integrators
+  // MUST call `IndexerClient.assertLpBindSafe(tick)` first. If you pass the fetched flag here, it is enforced:
+  // only `true` is allowed to build — `false`/`null` throw. (Omitting it stays permitted for back-compat, but
+  // the pre-check is required; do not add liquidity to an unverified pool.)
+  if ('lpBindVerified' in opts && opts.lpBindVerified !== true) {
+    throw new Error(`Refusing to build addLiquidity: pool LP-bind integrity is ${opts.lpBindVerified === false ? 'FAILED (counterfeit shares could drain your deposit)' : 'UNVERIFIED'}. Gate on IndexerClient.assertLpBindSafe(tick) before building.`);
+  }
   if (lpDepositToken.state.amount !== q.dToken) throw new Error('LP deposit token UTXO must equal dToken exactly (split first)');
   const dust = opts.tokenDust ?? COVENANT_DUST;
   const { kasReserve, tokenReserve, tokenCovid, lpCovid } = utxo.state;

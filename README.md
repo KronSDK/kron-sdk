@@ -10,7 +10,7 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > mempool refuses them (`under the required amount … for normalized transient mass`). Both scale with
 > transaction size, so they fail on real trades rather than small tests. See the [CHANGELOG](CHANGELOG.md).
 >
-> **Status: v0.13.4, mainnet.** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.14.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract and how to
 > adapt it to a specific wallet's injected provider. **0.7.0** added cross-wallet **provider discovery**
@@ -35,7 +35,10 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > `buildPoolV3SwapKasForToken`/`buildPoolV3SwapTokenForKas` defaulting unset `tokenDust` to sub-dust 1000
 > sompi instead of the mass-safe `COVENANT_DUST` floor; **0.13.4** fixes the identical sub-dust default on
 > the curve builders (`buildCpBuy`/`buildCpSell`/`buildCpGraduate`), which 0.13.3 missed — **upgrade if you
-> call any of these without an explicit `tokenDust`** — see the [CHANGELOG](CHANGELOG.md).
+> call any of these without an explicit `tokenDust`**; **0.14.0** adds the counterfeit-LP defence — pools that
+> graduated before the covenant guard (`ansem`/`kron` + tokens still on the curve) can be counterfeit-bound so
+> added liquidity is drained, so **gate `poolCp.buildAddLiquidity` on `IndexerClient.assertLpBindSafe(tick)`** —
+> see the [CHANGELOG](CHANGELOG.md).
 >
 > **⚠️ On an old pinned version? `npm install @kronsdk/kron-sdk@latest`.** Releases before 0.6.0 built
 > **version-0** transactions, which cannot carry the covenant bindings Kaspa's covenant layer (KIP-20)

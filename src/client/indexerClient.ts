@@ -13,6 +13,18 @@ export type CpState = {
   poolKas?: number;
   poolTotalShares?: number;
   poolLpCovid?: string;
+  /** LP-BIND INTEGRITY. Pools on the pre-`e5469a7ad482` pool covenant (the tokens graduated before the
+   *  counterfeit-LP guard landed) run a `bindLp` that lacks `require(OpCovInputCount(boundLp)==0)`, so a
+   *  permissionless binder can pass off a pre-minted token as the pool's LP shares and keep the remainder as
+   *  counterfeit shares that drain exactly the voluntary liquidity a depositor adds. The covenant is permanently
+   *  pinned and cannot be patched for those tokens. The indexer therefore reports whether the pool's L-share
+   *  supply matches the honest invariant (`MAX_SHARES − lockedShares`): `true` = safe to provide liquidity;
+   *  `false` = a counterfeit bind, DO NOT add liquidity; `undefined`/`null` = not computable yet (older indexer
+   *  or L not tracked) — treat as UNVERIFIED and do not add liquidity. **Always gate `poolCp.buildAddLiquidity`
+   *  on this** (see `IndexerClient.assertLpBindSafe`). Removing liquidity is always safe and is not gated. */
+  lpBindVerified?: boolean | null;
+  /** Total on-chain supply of the pool's LP-share token (decimal string); the basis for `lpBindVerified`. */
+  lpSupply?: string;
 };
 
 export type TokenInfo = {
@@ -89,6 +101,29 @@ export class IndexerClient {
   }
 
   poolhead(tick: string): Promise<PoolHead> { return fetchJson(`${this.baseUrl}/token/${encodeURIComponent(tick)}/poolhead`); }
+
+  /** LP-bind integrity for `tick`'s pool: `true` safe, `false` counterfeit, `null` not-yet-verifiable. See
+   *  `CpState.lpBindVerified`. Returns `null` (fail-safe) when the field is absent (indexer predates it). */
+  async lpBindVerified(tick: string): Promise<boolean | null> {
+    // `/token/{tick}` returns `result` as a single-element ARRAY (the KRC-20-shaped envelope), which fetchJson
+    // passes through verbatim — tolerate both an array and a bare object so this stays correct either way.
+    const info = (await this.token(tick)) as unknown as TokenInfo | TokenInfo[];
+    const row = Array.isArray(info) ? info[0] : info;
+    const v = row?.cpState?.lpBindVerified;
+    return v === true ? true : v === false ? false : null;
+  }
+  /** MANDATORY gate before `poolCp.buildAddLiquidity`: throws unless the pool's LP shares are provably honest.
+   *  A pre-`e5469a7ad482` pool can be counterfeit-bound so that added liquidity is drained by counterfeit shares;
+   *  only an exact L-supply match clears it. Fail-safe: an unverifiable (`null`) pool also throws. Removing
+   *  liquidity does not need this. */
+  async assertLpBindSafe(tick: string): Promise<void> {
+    const v = await this.lpBindVerified(tick);
+    if (v !== true) {
+      throw new Error(v === false
+        ? `Refusing to add liquidity to ${tick}: the pool's LP shares failed an on-chain integrity check (its bindLp was not a genuine genesis — counterfeit shares could drain your deposit).`
+        : `Refusing to add liquidity to ${tick}: the pool's LP-share integrity is not confirmed yet (retry shortly).`);
+    }
+  }
 
   lpUtxos(tick: string, address: string): Promise<LpUtxo[]> {
     return fetchJson(`${this.baseUrl}/token/${encodeURIComponent(tick)}/lp/${encodeURIComponent(address)}/utxos`);

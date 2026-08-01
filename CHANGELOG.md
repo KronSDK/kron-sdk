@@ -3,6 +3,32 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.14.0
+
+### Added — counterfeit-LP defence for pre-`e5469a7ad482` pools (gate `buildAddLiquidity`)
+
+**If your integration adds liquidity to KRON pools, this release is required.** Tokens that graduated before the
+pool covenant's counterfeit-LP guard landed (`e5469a7ad482`, i.e. anything pinned to `3297abfdaf8e` or earlier —
+including `ansem`/`kron` and the tokens still on the bonding curve) run a `bindLp` that lacks
+`require(OpCovInputCount(boundLp)==0)`. A permissionless binder can pass off a pre-minted token as the pool's LP
+shares (a *continuation* L, not a genesis) and keep the remainder as counterfeit shares that redeem — via
+`removeLiquidity` — for real KAS + tokens, draining exactly the voluntary liquidity a depositor adds. The covenant
+is permanently pinned and cannot be patched for those tokens; the defence is off-chain and now spans the SDK.
+
+- `IndexerClient` `CpState` gained `lpBindVerified?: boolean | null` (+ `lpSupply?`). The indexer reports the pool
+  honest iff its L-share supply equals the invariant `MAX_SHARES − lockedShares`; a profitable counterfeit must
+  retain shares beyond that, so it always exceeds it. `true` = safe, `false` = counterfeit, `null`/absent =
+  not-yet-verifiable (treat as unsafe).
+- `IndexerClient.lpBindVerified(tick)` and `IndexerClient.assertLpBindSafe(tick)` — **call `assertLpBindSafe`
+  before `poolCp.buildAddLiquidity`.** It throws on `false` and, fail-safe, on `null`. Removing liquidity is never
+  gated (honest LPs must always be able to exit).
+- `poolCp.buildAddLiquidity` gained `opts.lpBindVerified` — a tripwire: if you pass the fetched flag and it is not
+  `true`, the builder throws. Omitting it stays permitted for back-compat, but the pre-check is required.
+
+Non-breaking (builders' assembled bytes are unchanged — parity gate byte-identical). `buildBindLp` is unaffected:
+it only ever builds an honest genesis bind; the attack is crafted without the SDK, so this closes the *victim* side
+(SDK-based liquidity providers), not an SDK-enabled exploit.
+
 ## 0.13.4
 
 ### Fixed — curve `buildCpBuy`/`buildCpSell`/`buildCpGraduate` had the same sub-dust `tokenDust` default as 0.13.3's pool builders
