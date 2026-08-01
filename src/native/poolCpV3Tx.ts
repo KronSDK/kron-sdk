@@ -18,6 +18,10 @@ import {
 } from './kcc20Tx.js';
 import { SCALE } from '../curve/cpCurve.js';
 import type { CovenantSpend, CovInput, CovOutput } from './spend.js';
+import { COVENANT_DUST } from './spend.js';
+// KRN-SDK-DUST (0.13.3): see poolCpTx.ts's identical note — these two swap builders had the same unsafe
+// bare-1000n default (below the KIP-9 mass-safe floor), independently of the addLiquidity/removeLiquidity/
+// bindLp defaults fixed there. Same shared constant, same fix.
 import {
   type PoolCpTemplate, type PoolCpState, type PoolCpParams, type PoolCpUtxo,
   type PoolCpBuyQuote, type PoolCpSellQuote,
@@ -71,7 +75,7 @@ export function buildPoolV3SwapKasForToken(
   // Merge tokens are presence-owned: their kcc20 witness MUST be a co-present signed P2PK funding input.
   // Input 0 is the pool covenant (no signature), so the default 0 would fail the on-chain presence check.
   if (mergeTokens.length > 0 && presenceWitnessIdx === 0) throw new Error('presenceWitnessIdx must be set to a co-present signed P2PK funding input when mergeTokens is non-empty (input 0 is the pool covenant and carries no signature)');
-  const dust = opts.tokenDust ?? 1000n;
+  const dust = opts.tokenDust ?? COVENANT_DUST;
   const { kasReserve, tokenReserve, tokenCovid, totalShares, lpCovid } = utxo.state;
   const poolCovidHex = hexOf(poolCovid);
   const tokenCovidHex = hexOf(tokenCovid);
@@ -112,7 +116,7 @@ export function buildPoolV3SwapTokenForKas(
   q: PoolCpSellQuote, presenceWitnessIdx: number, opts: { tokenDust?: bigint } = {},
 ): CovenantSpend {
   if (traderTokens.length < 1) throw new Error('need at least one trader token');
-  const dust = opts.tokenDust ?? 1000n;
+  const dust = opts.tokenDust ?? COVENANT_DUST;
   const { kasReserve, tokenReserve, tokenCovid, totalShares, lpCovid } = utxo.state;
   const poolCovidHex = hexOf(poolCovid);
   const tokenCovidHex = hexOf(tokenCovid);

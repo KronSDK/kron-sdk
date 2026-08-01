@@ -31,6 +31,17 @@ import {
 import { genesisCovenantId, covidToBytes } from './genesis.js';
 import { FEE_OUT_MIN, SCALE } from '../curve/cpCurve.js';
 import type { CovenantSpend, CovInput, CovOutput } from './spend.js';
+import { COVENANT_DUST } from './spend.js';
+
+// KRN-SDK-DUST (0.13.3): every builder below used to default an UNSET `opts.tokenDust` to a bare `1000n` —
+// below the KIP-9 storage-mass-safe floor. The covenant does not constrain these outputs' KAS VALUE at all
+// (only their script), so a sub-dust build is covenant-VALID and silently produces a transaction that is
+// absurdly expensive to relay (KIP-9 mass blows up as an output's value shrinks toward zero) — the caller
+// discovers this only via `estimateNativeFee` returning a wildly inflated fee. Worse, "fixing" it by mutating
+// an output's value AFTER signing invalidates the FUNDING inputs' signatures (the sighash commits to every
+// output value), which surfaces as an unrelated "signature invalid" error. `kcc20Tx.ts`'s own `sendTokens`
+// already defaulted safely to this same value; these builders did not, which was the inconsistency that
+// produced the bug. `COVENANT_DUST` (`spend.ts`) is now the single shared default everywhere in this file.
 
 type K = Kaspa;
 type Spk = any;
@@ -306,7 +317,7 @@ export function buildAddLiquidity(
   lpPubkey: Uint8Array, q: AddLiquidityQuote, presenceWitnessIdx: number, opts: { tokenDust?: bigint } = {},
 ): CovenantSpend {
   if (lpDepositToken.state.amount !== q.dToken) throw new Error('LP deposit token UTXO must equal dToken exactly (split first)');
-  const dust = opts.tokenDust ?? 1000n;
+  const dust = opts.tokenDust ?? COVENANT_DUST;
   const { kasReserve, tokenReserve, tokenCovid, lpCovid } = utxo.state;
   const poolCovidHex = hexOf(poolCovid);
   const tokenCovidHex = hexOf(tokenCovid);
@@ -376,7 +387,7 @@ export function buildRemoveLiquidity(
   opts: { tokenDust?: bigint; lpInventory?: PoolLpInventoryUtxo } = {},
 ): CovenantSpend {
   if (lpShares.state.amount !== q.dShares) throw new Error('LP shares UTXO must equal dShares exactly (split first)');
-  const dust = opts.tokenDust ?? 1000n;
+  const dust = opts.tokenDust ?? COVENANT_DUST;
   const { kasReserve, tokenReserve, tokenCovid, lpCovid } = utxo.state;
   const poolCovidHex = hexOf(poolCovid);
   const tokenCovidHex = hexOf(tokenCovid);
@@ -449,7 +460,7 @@ export function buildBindLp(
   if (utxo.state.lpCovid.length !== 32 || !utxo.state.lpCovid.every((b) => b === 0)) throw new Error('pool lpCovid is already bound — bindLp is one-time');
   if (lockedShares < 1n || lockedShares >= MAX_SHARES) throw new Error('lockedShares out of range');
   if (utxo.state.totalShares !== lockedShares) throw new Error('bindLp requires totalShares == lockedShares (graduation state)');
-  const dust = opts.tokenDust ?? 1000n;
+  const dust = opts.tokenDust ?? COVENANT_DUST;
   const { kasReserve, tokenReserve, tokenCovid } = utxo.state;
   const inventoryAmount = MAX_SHARES - lockedShares;
   const lpInventory = covenantIdOwned(poolCovid, inventoryAmount, false);    // inventory → pool covid P (the ONLY L output)

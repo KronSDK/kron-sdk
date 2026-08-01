@@ -3,6 +3,26 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.13.3
+
+### Fixed — pool add/remove/swap builders defaulted unset `tokenDust` to sub-dust 1000 sompi
+
+**If you call `buildAddLiquidity`, `buildRemoveLiquidity`, `buildBindLp`, `buildPoolV3SwapKasForToken`, or
+`buildPoolV3SwapTokenForKas` without an explicit `opts.tokenDust`, this release is required.**
+
+These builders defaulted the covenant-owned output's KAS value to a bare `1000n` sompi when `tokenDust` was
+left unset — well below the KIP-9 storage-mass-safe floor (`COVENANT_DUST` = 50,000,000 sompi / 0.5 KAS). The
+covenant does not constrain these outputs' KAS *value* at all (only their script/state), so a sub-dust build
+is covenant-**valid** — it silently produces a transaction that is absurdly expensive to relay, discovered only
+via `estimateNativeFee` returning a wildly inflated fee. Bumping the output's value after the fact to work
+around it invalidates the funding inputs' signatures (the sighash commits to every output value), surfacing as
+an unrelated "signature invalid: malformed signature" error instead of the actual cause.
+
+All five builders now default unset `tokenDust` to `COVENANT_DUST` (exported from `./spend.js`) — the same
+value `kcc20Tx.ts`'s `sendTokens` already used. If you already pass an explicit `tokenDust`, nothing changes.
+
+**Upgrading is the whole fix.**
+
 ## 0.13.2
 
 ### Fixed — removeLiquidity was rejected on every current pool; unnecessary rejections on legitimate withdrawals

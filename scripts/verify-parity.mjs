@@ -284,7 +284,9 @@ console.log(`\nparity: SDK dist vs kron reference builders (curve template ${cur
     const utxo = { transactionId: '55'.repeat(32), index: 0, state, tokenUtxo: { transactionId: '66'.repeat(32), index: 0, value: 1000n } };
     const lpInv = { transactionId: '88'.repeat(32), index: 0, value: 1000n, amount: invIn };
     const lpDeposit = { transactionId: '99'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), q.dToken) };
-    const args = [kaspa, poolTplCanonical, tokenTpl, utxo, lpInv, poolCovid, lpDeposit, lpPubkey, q, 4];
+    // Explicit tokenDust on BOTH sides: this tests BUILDER STRUCTURE, independent of either side's default (the
+    // SDK's default now deliberately diverges from the reference's — see the dust-default section below).
+    const args = [kaspa, poolTplCanonical, tokenTpl, utxo, lpInv, poolCovid, lpDeposit, lpPubkey, q, 4, { tokenDust: 50_000_000n }];
     cmp('addLiquidity', MP.buildAddLiquidity(...args), SP.buildAddLiquidity(...args));
   }
 
@@ -296,7 +298,7 @@ console.log(`\nparity: SDK dist vs kron reference builders (curve template ${cur
     const utxo = { transactionId: '55'.repeat(32), index: 0, state, tokenUtxo: { transactionId: '66'.repeat(32), index: 0, value: 1000n } };
     const lpShares = { transactionId: 'aa'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), q.dShares) };
     const lpInventory = { transactionId: '88'.repeat(32), index: 0, value: 1000n, amount: oldInventory };
-    const args = [kaspa, poolTplCanonical, tokenTpl, utxo, lpShares, poolCovid, lpPubkey, q, 4, { lpInventory }];
+    const args = [kaspa, poolTplCanonical, tokenTpl, utxo, lpShares, poolCovid, lpPubkey, q, 4, { lpInventory, tokenDust: 50_000_000n }];
     cmp('removeLiquidity (dual-sided)', MP.buildRemoveLiquidity(...args), SP.buildRemoveLiquidity(...args));
   }
 
@@ -311,13 +313,62 @@ console.log(`\nparity: SDK dist vs kron reference builders (curve template ${cur
     const utxo = { transactionId: '55'.repeat(32), index: 0, state, tokenUtxo: { transactionId: '66'.repeat(32), index: 0, value: 1000n } };
     const lpShares = { transactionId: 'aa'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), q.dShares) };
     const lpInventory = { transactionId: '88'.repeat(32), index: 0, value: 1000n, amount: oldInventory };
-    const args = [kaspa, poolTplCanonical, tokenTpl, utxo, lpShares, poolCovid, lpPubkey, q, 4, { lpInventory }];
+    const args = [kaspa, poolTplCanonical, tokenTpl, utxo, lpShares, poolCovid, lpPubkey, q, 4, { lpInventory, tokenDust: 50_000_000n }];
     const ref = MP.buildRemoveLiquidity(...args), sdk = SP.buildRemoveLiquidity(...args);
     cmp('removeLiquidity (single-sided, zero token)', ref, sdk);
     const refHasLpToken = ref.outputs.some((o) => o.role === 'lpToken');
     const sdkHasLpToken = sdk.outputs.some((o) => o.role === 'lpToken');
     console.log(`  ${!refHasLpToken && !sdkHasLpToken ? 'PASS' : 'FAIL'}  both omit the LP-token output when dToken=0 (ref=${refHasLpToken} sdk=${sdkHasLpToken})`);
     if (refHasLpToken || sdkHasLpToken) fails++;
+  }
+}
+
+// --- POOL SWAP BUILDERS + DUST DEFAULT (KRN-SDK-DUST): buildPoolV3SwapKasForToken/TokenForKas -------------
+// The swap builders were never compared byte-for-byte at all (only the QUOTES feeding them, above). Two
+// checks per direction:
+//   (1) STRUCTURAL parity with explicit, IDENTICAL tokenDust on both sides — proves the builders themselves
+//       (input/output shape, redeem bytes, sig bytes) are unchanged, independent of either side's default.
+//   (2) The DELIBERATE default divergence: the private kron reference (reused internally by an app that
+//       ALWAYS overrides tokenDust explicitly) still defaults to the historical bare 1000n — below the KIP-9
+//       storage-mass-safe floor. This SDK's public builders now default to COVENANT_DUST (50,000,000 sompi)
+//       instead, because a public caller has no reason to know the private app's convention, and a silent
+//       sub-dust build is covenant-VALID while being absurdly expensive to relay. `ref` staying at 1000n here
+//       is EXPECTED and correct — it documents that the reference is untouched, not a regression.
+{
+  console.log('\npool swap builder parity + dust-default safety (SDK vs kron reference)');
+  const poolCovid = bytesOf('ee'.repeat(32));
+  const traderPubkey = bytesOf(BUYER);
+  const poolTplCanonical = { script: poolV2Tpl.script, stateStart: poolV2Tpl.stateStart };
+  const swapState = { kasReserve: 78763432n, tokenReserve: 31891357n, totalShares: 1149416n, tokenCovid: bytesOf(TOKEN_COVID), lpCovid: bytesOf('dd'.repeat(32)) };
+  const swapParams = { creatorFeeOwner: bytesOf(CREATOR), platformFeeOwner: bytesOf(PLATFORM), creatorFeeBps: 10n, platformFeeBps: 70n, lpFeeBps: 20n, lockedShares: 1000000n };
+
+  // buy
+  {
+    const utxo = { transactionId: '77'.repeat(32), index: 0, state: swapState, tokenUtxo: { transactionId: '78'.repeat(32), index: 0, value: 1000n } };
+    const q = MP.quotePoolCpBuy(swapState, swapParams, 50n * 1_000_000n);
+    const structArgs = [kaspa, poolTplCanonical, tokenTpl, swapParams, utxo, poolCovid, traderPubkey, q, [], 0, { tokenDust: 50_000_000n }];
+    cmp('swapKasForToken (structure, explicit equal dust)', MP3.buildPoolV3SwapKasForToken(...structArgs), SP3.buildPoolV3SwapKasForToken(...structArgs));
+
+    const defaultArgs = [kaspa, poolTplCanonical, tokenTpl, swapParams, utxo, poolCovid, traderPubkey, q, [], 0];
+    const ref = MP3.buildPoolV3SwapKasForToken(...defaultArgs), sdk = SP3.buildPoolV3SwapKasForToken(...defaultArgs);
+    const okDefault = ref.outputs[1].value === 1000n && ref.outputs[2].value === 1000n && sdk.outputs[1].value === 50_000_000n && sdk.outputs[2].value === 50_000_000n;
+    console.log(`  ${okDefault ? 'PASS' : 'FAIL'}  unset tokenDust: reference stays at legacy 1000n (unchanged), SDK now defaults to safe COVENANT_DUST (ref pool=${ref.outputs[1].value} trader=${ref.outputs[2].value}; sdk pool=${sdk.outputs[1].value} trader=${sdk.outputs[2].value})`);
+    if (!okDefault) fails++;
+  }
+
+  // sell
+  {
+    const utxo = { transactionId: '79'.repeat(32), index: 0, state: swapState, tokenUtxo: { transactionId: '7a'.repeat(32), index: 0, value: 1000n } };
+    const q = MP.quotePoolCpSell(swapState, swapParams, 500000n);
+    const traderTokens = [{ transactionId: '7b'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), 500000n) }];
+    const structArgs = [kaspa, poolTplCanonical, tokenTpl, swapParams, utxo, poolCovid, traderPubkey, traderTokens, q, 0, { tokenDust: 50_000_000n }];
+    cmp('swapTokenForKas (structure, explicit equal dust)', MP3.buildPoolV3SwapTokenForKas(...structArgs), SP3.buildPoolV3SwapTokenForKas(...structArgs));
+
+    const defaultArgs = [kaspa, poolTplCanonical, tokenTpl, swapParams, utxo, poolCovid, traderPubkey, traderTokens, q, 0];
+    const ref = MP3.buildPoolV3SwapTokenForKas(...defaultArgs), sdk = SP3.buildPoolV3SwapTokenForKas(...defaultArgs);
+    const okDefault = ref.outputs[1].value === 1000n && sdk.outputs[1].value === 50_000_000n;
+    console.log(`  ${okDefault ? 'PASS' : 'FAIL'}  unset tokenDust on the sell side too (ref=${ref.outputs[1].value}, expected legacy 1000n; sdk=${sdk.outputs[1].value}, expected safe 50,000,000n)`);
+    if (!okDefault) fails++;
   }
 }
 
