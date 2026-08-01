@@ -130,14 +130,22 @@ export type PoolCpSellQuote = {
   creatorOut: bigint; platformOut: bigint; net: bigint; newKas: bigint; newToken: bigint;
 };
 
-/** retainKas (SCALE units) kept in-pool as this trade's voluntary LP yield — BYTE-EXACT with amm_pool_cp_v3.sil's
- *  two nested integer floors: `lpFeeUnits = kas·lpFeeBps/10000; retainKas = lpFeeUnits·(totalShares−lockedShares)/
- *  totalShares`. Computing it in one precise step (not a pre-floored `lpFeeBps·vol/total` bps, which floors to 0 for
- *  any pool under ≈1/lpFeeBps voluntary) is the whole fix — but the ORDER of ops must match the covenant exactly or
- *  the quote drifts from what the VM enforces (buy: too-few tokens rejected; sell: an over-ask the VM rejects). */
+/** retainKas (SCALE units) kept in-pool as this trade's voluntary LP yield — byte-exact with
+ *  amm_pool_cp_v3.sil's shared anti-partition CEILING:
+ *  ceil(kasUnits·lpFeeBps·(totalShares−lockedShares)/(10000·totalShares)).
+ *
+ *  This was two nested integer FLOORS until 0.13.1, which under-computed retainKas by up to one unit. The
+ *  covenant switched to the ceiling on 2026-07-14 (`retainedKasCeil`); the SDK copy did not follow, and the
+ *  release parity gate only covered the CURVE builders, so it drifted silently.
+ *  A too-small retainKas makes quotePoolCpBuy derive a too-small `newToken` — i.e. it offers the buyer one
+ *  retain-unit too many tokens — and the VM then recomputes the real (larger) retainKas and rejects on
+ *  `require((newKas - retainKas) * newToken >= oldK)` with "script ran, but verification failed".
+ *  Rejection is state-dependent, not random: it bites whenever the extra unit crosses a ceiling boundary,
+ *  with probability ≈ tokenReserve/kasReserve — near-certain on token-heavy pools, intermittent elsewhere. */
 function retainKasUnits(kasUnits: bigint, state: PoolCpState, p: Pick<PoolCpParams, 'lpFeeBps' | 'lockedShares'>): bigint {
-  const lpFeeUnits = (kasUnits * p.lpFeeBps) / 10000n;
-  return (lpFeeUnits * (state.totalShares - p.lockedShares)) / state.totalShares;
+  const weight = p.lpFeeBps * (state.totalShares - p.lockedShares);
+  if (weight <= 0n) return 0n;
+  return ceilDiv(kasUnits * weight, 10000n * state.totalShares);
 }
 
 /** Buy from the pool: spend `kasInSompi` (floored to a SCALE step) → tokenOut, retaining the voluntary LP fee in-pool. */

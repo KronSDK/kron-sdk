@@ -26,6 +26,11 @@ const SILVERC = `${PROJX}/silverscript/target/debug/silverc`;
 const KWASM_JS = `${KRON}/web/src/vendor/kaspa/kaspa.js`;
 const KWASM_BG = `${KRON}/web/src/vendor/kaspa/kaspa_bg.wasm`;
 const REF_CURVE = `${KRON}/web/src/native/curveCpTx.ts`;
+// KRN-SDK-POOL (0.13.1): the POOL builders were never gated here, only the curve — which is exactly how
+// retainKasUnits drifted from the covenant's anti-partition ceiling to two nested floors and shipped a quote
+// the VM rejects. Any exported function the SDK re-implements must have a reference here or it can rot.
+const REF_POOL = `${KRON}/web/src/native/poolCpTx.ts`;
+const REF_POOL_V3 = `${KRON}/web/src/native/poolCpV3Tx.ts`;
 const REF_BUDGETS = `${KRON}/web/src/native/covenantTxV1.ts`;   // per-input compute budgets live here, not in the builders
 const REF_KCC20 = `${KRON}/web/src/native/kcc20Tx.ts`;
 const SDK_DIST = `${SDK}/dist/index.js`;
@@ -62,6 +67,10 @@ const M = await import(pathToFileURL(REF_CURVE).href);                 // refere
 const { addressPresenceOwned, IDENTIFIER } = await import(pathToFileURL(REF_KCC20).href);
 const SDK_MOD = await import(pathToFileURL(SDK_DIST).href);
 const S = SDK_MOD.curveCp;                                             // this SDK's built builders
+const MP = await import(pathToFileURL(REF_POOL).href);                 // reference pool quotes (kron monorepo)
+const MP3 = await import(pathToFileURL(REF_POOL_V3).href);             // reference v3 pool builders
+const SP = SDK_MOD.poolCp ?? SDK_MOD;                                  // this SDK's pool quotes
+const SP3 = SDK_MOD.poolCpV3 ?? SDK_MOD;                               // this SDK's v3 pool builders
 const SPEND = SDK_MOD.spend ?? SDK_MOD;                                // per-input compute budget constants
 const { COVENANT_ID } = IDENTIFIER;
 
@@ -107,9 +116,10 @@ const oPre = orderScript.slice(0, orderGen.state_layout.start), oSuf = orderScri
 const orderTplHash = blake2b256(Buffer.concat([Buffer.from(oPre), Buffer.from(oSuf)]));
 
 const vKas = 5000, graduationKas = 5000000000, cB = 70, pB = 30, gB = 500;
-// Current curve_cp ABI. Tail order: vesting template (EMPTY/ZERO here = non-vested deploy), vestingTotal,
-// poolLockedShares, initTokenReserve, batch-order template, then the dev-fund leg declared LAST.
-const curveCtor = [arr(bytesOf(CREATOR)), arr(bytesOf(PLATFORM)), arr(bytesOf(CREATOR)), I(vKas), I(graduationKas), I(cB), I(pB), I(gB), arr(bytesOf(ZERO_COVID)), arr(tokPrefix), arr(tokSuffix), arr(tplHash), I(tokPrefix.length), I(tokSuffix.length), arr(pPre), arr(pSuf), arr(poolV2TplHash), Bo(false), arr(new Uint8Array(0)), arr(new Uint8Array(0)), arr(bytesOf(ZERO_COVID)), I(0), I(POOL_LOCKED), I(0), arr(orderTplHash), I(oPre.length), I(oSuf.length), arr(bytesOf(DEV_FUND)), I(devBps)];
+// Current curve_cp ABI. Vesting was RETIRED from the covenant on 2026-08-01 — the four vesting ctor args
+// (prefix/suffix/templateHash/total) and the initVested entrypoint are gone, so batchBuy moved from selector
+// 5 to 4. Tail order is now: poolLockedShares, initTokenReserve, batch-order template, dev-fund leg LAST.
+const curveCtor = [arr(bytesOf(CREATOR)), arr(bytesOf(PLATFORM)), arr(bytesOf(CREATOR)), I(vKas), I(graduationKas), I(cB), I(pB), I(gB), arr(bytesOf(ZERO_COVID)), arr(tokPrefix), arr(tokSuffix), arr(tplHash), I(tokPrefix.length), I(tokSuffix.length), arr(pPre), arr(pSuf), arr(poolV2TplHash), Bo(false), I(POOL_LOCKED), I(0), arr(orderTplHash), I(oPre.length), I(oSuf.length), arr(bytesOf(DEV_FUND)), I(devBps)];
 const curveGen = compile(`${N}/curve_cp.sil`, curveCtor);
 const baseParams = { creatorFeeOwner: bytesOf(CREATOR), platformFeeOwner: bytesOf(PLATFORM), vKas: BigInt(vKas), graduationKas: BigInt(graduationKas), creatorFeeBps: BigInt(cB), platformFeeBps: BigInt(pB), graduationFeeBps: BigInt(gB) };
 // Dual-ABI: dev-fund tokens (every mainnet token) carry the third fee output at a FIXED covenant index;
@@ -200,6 +210,50 @@ console.log(`\nparity: SDK dist vs kron reference builders (curve template ${cur
   const rt = ok.ok === true && tampered.ok === false;
   console.log(`  ${rt ? 'PASS' : 'FAIL'}  tokenlist sign (backend) → verify (SDK) round-trip + tamper-fails`);
   if (!rt) fails++;
+}
+
+// --- POOL QUOTES (KRN-SDK-POOL): the numeric path the covenant enforces -----------------------------
+// The builders were already identical; what drifted was the QUOTE feeding them. `retainKasUnits` is the
+// covenant's anti-partition ceiling, and a one-unit error there makes the VM reject on
+// `require((newKas - retainKas) * newToken >= oldK)`. Compare the quotes numerically over a spread of pool
+// shapes and trade sizes — a single canonical case would miss it, because whether the off-by-one crosses a
+// ceiling boundary is state-dependent (probability ≈ tokenReserve/kasReserve).
+{
+  console.log('\npool quote parity (SDK vs kron reference) — the path that rejected 0.13.0 pool swaps');
+  const SCALE_ = 1000000n;
+  const shapes = [
+    { kasReserve: 78763432n, tokenReserve: 31891357n, totalShares: 1149416n, lockedShares: 1000000n }, // live KRON
+    { kasReserve: 207917n,   tokenReserve: 96843443n, totalShares: 1000000n, lockedShares: 1000000n }, // live PEPE (token-heavy)
+    { kasReserve: 500000n,   tokenReserve: 500000n,   totalShares: 2000000n, lockedShares: 1000000n }, // 50% voluntary
+    { kasReserve: 1000000n,  tokenReserve: 40000000n, totalShares: 1000001n, lockedShares: 1000000n }, // 1 voluntary share
+  ];
+  const params = { creatorFeeBps: 10n, platformFeeBps: 70n, lpFeeBps: 20n, lockedShares: 1000000n };
+  let checked = 0, bad = 0;
+  for (const sh of shapes) {
+    const st = { ...sh, tokenCovid: new Uint8Array(32), lpCovid: new Uint8Array(32) };
+    const p = { ...params, lockedShares: sh.lockedShares };
+    for (const kas of [1n, 5n, 50n, 500n, 5000n, 50000n]) {
+      const inSompi = kas * SCALE_;
+      for (const [label, refFn, sdkFn] of [
+        ['quotePoolCpBuy', MP.quotePoolCpBuy, SP.quotePoolCpBuy ?? SP3.quotePoolV3Buy],
+        ['quotePoolCpSell', MP.quotePoolCpSell, SP.quotePoolCpSell ?? SP3.quotePoolV3Sell],
+      ]) {
+        if (typeof refFn !== 'function' || typeof sdkFn !== 'function') continue;
+        let a, b;
+        try { a = refFn(st, p, inSompi); } catch { a = null; }
+        try { b = sdkFn(st, p, inSompi); } catch { b = null; }
+        checked++;
+        const j = (q) => (q == null ? 'null' : JSON.stringify(q, (_, v) => (typeof v === 'bigint' ? v.toString() : v)));
+        if (j(a) !== j(b)) {
+          bad++; fails++;
+          console.log(`  FAIL  ${label} kas=${kas} kR=${sh.kasReserve} tR=${sh.tokenReserve}`);
+          console.log('    ref:', j(a).slice(0, 220));
+          console.log('    sdk:', j(b).slice(0, 220));
+        }
+      }
+    }
+  }
+  console.log(`  ${bad === 0 ? 'PASS' : 'FAIL'}  ${checked} pool quotes compared across ${shapes.length} pool shapes`);
 }
 
 console.log(`\n${fails === 0 ? '✓ PARITY OK — SDK builders are byte-identical to the covenant-verified reference' : '✗ ' + fails + ' PARITY MISMATCH(ES) — SDK has drifted from the covenant; do not publish'}`);
