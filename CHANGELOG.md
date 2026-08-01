@@ -3,6 +3,45 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.13.2
+
+### Fixed — removeLiquidity was rejected on every current pool; unnecessary rejections on legitimate withdrawals
+
+**If you build LP withdrawals (`buildRemoveLiquidity`), this release is required.**
+
+`buildRemoveLiquidity` always built the pre-restructure ARCHIVED transaction shape — no pool-inventory input,
+and the returned L amount set to the raw `dShares` — regardless of which covenant schema the pool actually
+runs. Every pool live as of this SDK's release requires the CURRENT shape instead: the pool's *complete* L
+inventory moves alongside the holder's shares, and the sole L output is the *consolidated* new inventory
+(`MAX_SHARES − newShares`), not merely the redeemed amount. Every `removeLiquidity` this SDK built was
+rejected by the covenant.
+
+Two smaller issues shipped alongside it, both making legitimate withdrawals harder than the covenant requires:
+
+- `quoteRemoveLiquidity` refused a withdrawal unless **both** the KAS and token side rounded to at least 1 —
+  the covenant only requires **one** side to (`dKas > 0 || dToken > 0`), with the zero side simply carrying no
+  recipient output. A small LP position on an asymmetric pool could be told "too small" when the covenant
+  would have accepted it.
+- `removeMinDShares` used the same too-strict rule (the **larger** of the two per-side thresholds instead of
+  the **smaller**), which could report a withdrawal minimum well above what the covenant actually requires.
+
+**Upgrading is the whole fix**, with one addition: `buildRemoveLiquidity` now takes an optional
+`opts.lpInventory` — the pool's L-inventory UTXO, fetched the same way `buildAddLiquidity` already requires it
+— which every current-schema pool needs. `PoolCpTemplate` gained an optional `canonicalInventoryRequired`
+flag (present on the compiled template's params as `canonicalLpInventory` from the KRON registry) so the
+builder knows which shape to build; every live pool sets it.
+
+```ts
+const spend = kron.poolCp.buildRemoveLiquidity(
+  k, poolTpl, tokenTpl, utxo, lpShares, poolCovid, lpPubkey, quote, presenceWitnessIdx,
+  { lpInventory },   // NEW — required whenever poolTpl.canonicalInventoryRequired is true
+);
+```
+
+Verified against KRON's own covenant-verified reference implementation, byte-for-byte, across a dual-sided
+withdrawal, a single-sided withdrawal (token side floors to zero), and the resulting transaction shape in
+each case — including that the LP-token output is correctly omitted when its side rounds to zero.
+
 ## 0.13.1
 
 ### Fixed — pool swaps were rejected on-chain

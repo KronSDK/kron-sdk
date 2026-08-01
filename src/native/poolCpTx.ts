@@ -48,8 +48,13 @@ const hexOf = (u8: Uint8Array): string => Array.from(u8, (b) => b.toString(16).p
 //   off 0: 0x08 <kasReserve:8 LE>   off 9: 0x08 <tokenReserve:8 LE>   off 18: 0x20 <tokenCovid:32>
 //   off 51: 0x08 <totalShares:8 LE> off 60: 0x20 <lpCovid:32>
 
-/** Compiled pool template (silverc output; one template per (lockedShares,bps...) — only state varies). */
-export type PoolCpTemplate = { script: Uint8Array; stateStart: number };
+/** Compiled pool template (silverc output; one template per (lockedShares,bps...) — only state varies).
+ *  `canonicalInventoryRequired` distinguishes the CURRENT amm_pool_cp_v3.sil shape — which always moves the
+ *  pool's complete L inventory alongside a holder's shares in removeLiquidity (REMOVE_POOL_LP_IN /
+ *  REMOVE_HOLDER_LP_IN) — from a handful of pre-restructure ARCHIVED templates that returned only the holder's
+ *  dShares. Read it off the compiled template's params (the KRON registry's `/api/native/cp-template` response
+ *  echoes it as `canonicalLpInventory`); every live pool as of this SDK's release requires it. */
+export type PoolCpTemplate = { script: Uint8Array; stateStart: number; canonicalInventoryRequired?: boolean };
 
 /** Pool state: KAS reserve (SCALE units; pool UTXO value == kasReserve·SCALE), token reserve, the token
  *  covid A, issued LP shares, and the LP-share token covid L (ZERO until bindLp). */
@@ -236,14 +241,18 @@ export function quoteAddLiquidity(state: PoolCpState, dKas: bigint): AddLiquidit
   return { dKas, dToken, dShares, newKas: state.kasReserve + dKas, newToken: state.tokenReserve + dToken, newShares: state.totalShares + dShares };
 }
 
-/** The smallest withdrawable dShares — the floored covenant only needs the payout to round to ≥ 1 on BOTH sides
- *  (dKas ≥ 1 ⟺ dShares ≥ ⌈totalShares/kasReserve⌉; dToken ≥ 1 likewise). No exact-integer "step" exists anymore,
- *  so any dShares at/above this withdraws (the old lcm-step that could strand a voluntary LP is gone). */
+/** The smallest withdrawable dShares — at least ONE side must round positive, per the covenant's
+ *  `require(dKas > 0 || dToken > 0)`; the other side may be zero and simply omits its recipient output
+ *  (see `quoteRemoveLiquidity` / `buildRemoveLiquidity`), so a tiny legitimate LP position is never
+ *  stranded by an asymmetric reserve. This was previously the MAX of the two per-side thresholds — requiring
+ *  BOTH sides to round positive — which rejected withdrawals the covenant would have accepted whenever the
+ *  reserves were asymmetric enough that one side's threshold was much larger than the other's. No exact-
+ *  integer "step" exists (the old lcm-step that could strand a voluntary LP is gone). */
 export function removeMinDShares(state: PoolCpState): bigint {
   const ceilDiv = (a: bigint, b: bigint) => (a + b - 1n) / b;
   const minKas = ceilDiv(state.totalShares, state.kasReserve);
   const minTok = ceilDiv(state.totalShares, state.tokenReserve);
-  return minKas > minTok ? minKas : minTok;
+  return minKas < minTok ? minKas : minTok;
 }
 
 /** Clamp a desired `dShares` to a withdrawable amount: returns it unchanged if ≥ the minimum (see removeMinDShares),
@@ -255,13 +264,19 @@ export function snapRemoveDShares(state: PoolCpState, desiredDShares: bigint): b
 
 /** Compute a FLOORED-proportional withdrawal for `dShares` (matches the covenant): dKas/dToken are floored, so
  *  the sub-unit remainder stays in the pool. Throws only if dShares is non-positive, would dip below the locked
- *  floor (totalShares − dShares < lockedShares), or is so small the floored payout rounds to < 1 of either side. */
+ *  floor (totalShares − dShares < lockedShares), or is so small BOTH floored payouts round to zero.
+ *
+ *  Previously this required dKas AND dToken to each round to ≥ 1, but the covenant only requires
+ *  `dKas > 0 || dToken > 0` — a zero-side payout is valid and simply has no recipient output
+ *  (`buildRemoveLiquidity` omits it). Rejecting a single-sided-zero withdrawal here refused transactions
+ *  the covenant would have accepted, on any pool whose reserves were asymmetric enough to floor one side to
+ *  zero at a `dShares` where the other side was still positive. */
 export function quoteRemoveLiquidity(state: PoolCpState, p: Pick<PoolCpParams, 'lockedShares'>, dShares: bigint): RemoveLiquidityQuote {
   if (dShares <= 0n) throw new Error('dShares must be positive');
   if (state.totalShares - dShares < p.lockedShares) throw new Error('removal would dip below the permanently-locked floor');
   const dKas = (state.kasReserve * dShares) / state.totalShares;     // bigint division floors (positives)
   const dToken = (state.tokenReserve * dShares) / state.totalShares;
-  if (dKas < 1n || dToken < 1n) throw new Error('withdrawal too small — rounds to less than 1 KAS-unit or 1 token');
+  if (dKas === 0n && dToken === 0n) throw new Error('withdrawal too small: both payout sides round to zero');
   return { dShares, dKas, dToken, newKas: state.kasReserve - dKas, newToken: state.tokenReserve - dToken, newShares: state.totalShares - dShares };
 }
 
@@ -334,14 +349,31 @@ export function buildAddLiquidity(
  * EXACTLY dShares (full-UTXO) and a co-present P2PK input at `presenceWitnessIdx`. The covenant floor guard
  * (totalShares − dShares ≥ lockedShares) makes the graduation floor un-withdrawable.
  *
- * Inputs:  [0]=pool [1]=pool token-A reserve(P) [2]=LP L shares(presence, =dShares)
- * Outputs: [0]=pool(shrunk) [1]=pool token-A reserve(P, newToken) [2]=LP withdrawn token(presence, dToken)
- *          [3]=dShares returned to the pool L inventory(P)
+ * KRN-SDK-POOL-LP (fixed alongside the 0.13.1 swap-quote fix): this previously always built the pre-restructure
+ * ARCHIVED shape — no pool-inventory input, `poolLpOut = dShares` — which every CURRENT-schema pool (i.e. every
+ * live pool as of this release) rejects, because amm_pool_cp_v3.sil unconditionally requires TWO L-side inputs
+ * (REMOVE_POOL_LP_IN=2, the pool's complete inventory; REMOVE_HOLDER_LP_IN=3, the holder's exact dShares) and a
+ * SOLE consolidated L output of `MAX_SHARES − newShares`. Pass `opts.lpInventory` (the pool's L-inventory UTXO,
+ * from the same lookup `buildAddLiquidity` already needs) whenever `tpl.canonicalInventoryRequired` is true —
+ * which is every schema this SDK version knows how to compile.
+ *
+ * CANONICAL (current — REQUIRED for every live pool):
+ *   Inputs:  [0]=pool [1]=pool token-A reserve(P) [2]=pool L inventory(P, complete) [3]=LP L shares(presence, =dShares)
+ *   Outputs: [0]=pool(shrunk) [1]=pool token-A reserve(P, newToken) [2]=OPTIONAL LP withdrawn token(presence, dToken)
+ *            [3]=consolidated L inventory(P, MAX_SHARES − newShares)
+ * ARCHIVED (a handful of pre-restructure pinned templates only):
+ *   Inputs:  [0]=pool [1]=pool token-A reserve(P) [2]=LP L shares(presence, =dShares)
+ *   Outputs: [0]=pool(shrunk) [1]=pool token-A reserve(P, newToken) [2]=OPTIONAL LP withdrawn token(presence, dToken)
+ *            [3]=dShares returned to the pool L inventory(P)
+ * The LP-withdrawn-token output is present only when `q.dToken > 0` — the covenant allows a single-sided
+ * withdrawal (`dKas > 0 || dToken > 0`) and counts covid-A outputs accordingly; including it unconditionally
+ * would fail `OpCovOutputCount(tokenCovid)` on a zero-token-side withdrawal.
  */
 export function buildRemoveLiquidity(
   k: K, tpl: PoolCpTemplate, tokenTpl: Kcc20Template,
   utxo: PoolCpUtxo, lpShares: { transactionId: string; index: number; value: bigint; state: Kcc20State },
-  poolCovid: Uint8Array, lpPubkey: Uint8Array, q: RemoveLiquidityQuote, presenceWitnessIdx: number, opts: { tokenDust?: bigint } = {},
+  poolCovid: Uint8Array, lpPubkey: Uint8Array, q: RemoveLiquidityQuote, presenceWitnessIdx: number,
+  opts: { tokenDust?: bigint; lpInventory?: PoolLpInventoryUtxo } = {},
 ): CovenantSpend {
   if (lpShares.state.amount !== q.dShares) throw new Error('LP shares UTXO must equal dShares exactly (split first)');
   const dust = opts.tokenDust ?? 1000n;
@@ -349,31 +381,42 @@ export function buildRemoveLiquidity(
   const poolCovidHex = hexOf(poolCovid);
   const tokenCovidHex = hexOf(tokenCovid);
   const lpCovidHex = hexOf(lpCovid);
+  const canonical = !!tpl.canonicalInventoryRequired;
+  const lpInventory = opts.lpInventory;
+  if (canonical && (!lpInventory || lpInventory.amount !== MAX_SHARES - utxo.state.totalShares)) {
+    throw new Error('removeLiquidity requires the canonical pool LP inventory (pass opts.lpInventory equal to MAX_SHARES - totalShares)');
+  }
   const poolTokenOut = covenantIdOwned(poolCovid, q.newToken, false);   // shrunk token-A reserve (P)
-  const lpTokenOut = addressPresenceOwned(lpPubkey, q.dToken);          // the LP's withdrawn token (presence)
-  const poolLpOut = covenantIdOwned(poolCovid, q.dShares, false);       // dShares returned to inventory (P)
+  const lpTokenOut = addressPresenceOwned(lpPubkey, q.dToken);         // the LP's withdrawn token (presence)
+  const poolLpOut = covenantIdOwned(poolCovid, canonical ? MAX_SHARES - q.newShares : q.dShares, false);
 
   const curRedeem = materializePoolCpScript(tpl, utxo.state);
   const newRedeem = materializePoolCpScript(tpl, { kasReserve: q.newKas, tokenReserve: q.newToken, tokenCovid, totalShares: q.newShares, lpCovid });
   const poolAResRedeem = materializeKcc20Script(tokenTpl, covenantIdOwned(poolCovid, tokenReserve, false));
   const lpSharesRedeem = materializeKcc20Script(tokenTpl, lpShares.state);
+  const poolLpInvRedeem = canonical ? materializeKcc20Script(tokenTpl, covenantIdOwned(poolCovid, lpInventory!.amount, false)) : null;
 
-  // token-A group: input [pool reserve (input 1, P)] → 2 outputs [shrunk reserve, LP withdrawn token].
-  const aStates = [poolTokenOut, lpTokenOut];
+  // token-A group: input [pool reserve (input 1, P)] → 1 or 2 outputs, [shrunk reserve] or [shrunk reserve, LP token].
+  const aStates = q.dToken > 0n ? [poolTokenOut, lpTokenOut] : [poolTokenOut];
   const aWitnesses = [0];
-  // L group: input [LP shares (input 2, presence)] → 1 output [returned to pool inventory].
+  // L group. Canonical: [pool inventory(P), holder shares] → one consolidated larger inventory. Archived:
+  // [holder shares] alone → the returned amount is just the redeemed dShares. In BOTH shapes the L-side input
+  // that ends up at index 2 is the one this output continues (canonical: the inventory input; archived: the
+  // shares input, since there is no separate inventory input to sit ahead of it) — the binding below reflects
+  // that unconditionally.
   const lStates = [poolLpOut];
-  const lWitnesses = [presenceWitnessIdx];
+  const lWitnesses = canonical ? [0, presenceWitnessIdx] : [presenceWitnessIdx];
 
   const inputs: CovInput[] = [
     { transactionId: utxo.transactionId, index: utxo.index, value: kasReserve * SCALE, scriptPublicKey: poolCpSpk(k, curRedeem), signatureScript: removeLiquiditySig(k, curRedeem, q.dShares, q.dKas, q.dToken, poolTokenOut, lpTokenOut, poolLpOut), redeem: curRedeem, role: 'pool' },
     { transactionId: utxo.tokenUtxo.transactionId, index: utxo.tokenUtxo.index, value: utxo.tokenUtxo.value, scriptPublicKey: kcc20Spk(k, poolAResRedeem), signatureScript: transferSigScript(k, poolAResRedeem, aStates, aWitnesses), redeem: poolAResRedeem, role: 'poolToken' },
+    ...(canonical ? [{ transactionId: lpInventory!.transactionId, index: lpInventory!.index, value: lpInventory!.value, scriptPublicKey: kcc20Spk(k, poolLpInvRedeem!), signatureScript: transferSigScript(k, poolLpInvRedeem!, lStates, lWitnesses), redeem: poolLpInvRedeem!, role: 'poolLpInventory' as const }] : []),
     { transactionId: lpShares.transactionId, index: lpShares.index, value: lpShares.value, scriptPublicKey: kcc20Spk(k, lpSharesRedeem), signatureScript: transferSigScript(k, lpSharesRedeem, lStates, lWitnesses), redeem: lpSharesRedeem, role: 'lpShares' },
   ];
   const outputs: CovOutput[] = [
     { value: q.newKas * SCALE, scriptPublicKey: poolCpSpk(k, newRedeem), role: 'pool', binding: { covid: poolCovidHex, authorizingInput: 0 } },
     { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, lpTokenOut)), role: 'lpToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
+    ...(q.dToken > 0n ? [{ value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, lpTokenOut)), role: 'lpToken' as const, binding: { covid: tokenCovidHex, authorizingInput: 1 } }] : []),
     { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolLpOut)), role: 'poolLpInventory', binding: { covid: lpCovidHex, authorizingInput: 2 } },
   ];
   return { kind: 'removeLiquidity', inputs, outputs, economics: { dShares: q.dShares, dKas: q.dKas, dToken: q.dToken, newShares: q.newShares }, covids: { poolCovid: poolCovidHex, tokenCovid: tokenCovidHex } };

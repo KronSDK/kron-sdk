@@ -64,7 +64,7 @@ const kaspaMod = await import(pathToFileURL(KWASM_JS).href);
 const kaspa = kaspaMod; const init = kaspaMod.default;
 await init({ module_or_path: readFileSync(KWASM_BG) });
 const M = await import(pathToFileURL(REF_CURVE).href);                 // reference builders (kron monorepo)
-const { addressPresenceOwned, IDENTIFIER } = await import(pathToFileURL(REF_KCC20).href);
+const { addressPresenceOwned, covenantIdOwned, IDENTIFIER } = await import(pathToFileURL(REF_KCC20).href);
 const SDK_MOD = await import(pathToFileURL(SDK_DIST).href);
 const S = SDK_MOD.curveCp;                                             // this SDK's built builders
 const MP = await import(pathToFileURL(REF_POOL).href);                 // reference pool quotes (kron monorepo)
@@ -254,6 +254,71 @@ console.log(`\nparity: SDK dist vs kron reference builders (curve template ${cur
     }
   }
   console.log(`  ${bad === 0 ? 'PASS' : 'FAIL'}  ${checked} pool quotes compared across ${shapes.length} pool shapes`);
+}
+
+// --- POOL LIQUIDITY BUILDERS (KRN-SDK-POOL-LP): buildAddLiquidity / buildRemoveLiquidity byte-for-byte -----
+// buildAddLiquidity was already correct; buildRemoveLiquidity previously built the pre-restructure ARCHIVED
+// shape unconditionally (no pool-inventory input, poolLpOut = dShares) — rejected by every CURRENT-schema
+// pool, i.e. every live pool. The reference builder here is KRON's own web/src/native/poolCpTx.ts, whose
+// removeLiquidity output is independently VM-proven by covenants/native/tools/verify-builders-cp-v3.mjs (the
+// dual-sided case) and covenants/native/tools/verify-pool-cp-v3.mjs (the zero-token-side case) — so
+// byte-identity to it is byte-identity to a builder the real txscript VM has already accepted.
+// The reference's OWN quoteRemoveLiquidity feeds both builders here, so this isolates BUILDER parity from the
+// quote-numeric parity already checked above.
+{
+  console.log('\npool liquidity builder parity (SDK vs kron reference) — buildAddLiquidity / buildRemoveLiquidity');
+  const poolCovid = bytesOf('ee'.repeat(32));
+  const lpPubkey = bytesOf(BUYER);
+  const poolTplCanonical = { script: poolV2Tpl.script, stateStart: poolV2Tpl.stateStart, canonicalInventoryRequired: true };
+  const lpParams = { lockedShares: BigInt(POOL_LOCKED) };
+
+  const mkState = (kasReserve, tokenReserve, totalShares) => ({
+    kasReserve, tokenReserve, totalShares, tokenCovid: bytesOf(TOKEN_COVID), lpCovid: bytesOf('dd'.repeat(32)),
+  });
+
+  // addLiquidity: one representative deposit.
+  {
+    const state = mkState(4040n, 202000n, 1010n);
+    const q = MP.quoteAddLiquidity(state, 40n);
+    const invIn = 10_000_000n - state.totalShares;
+    const utxo = { transactionId: '55'.repeat(32), index: 0, state, tokenUtxo: { transactionId: '66'.repeat(32), index: 0, value: 1000n } };
+    const lpInv = { transactionId: '88'.repeat(32), index: 0, value: 1000n, amount: invIn };
+    const lpDeposit = { transactionId: '99'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), q.dToken) };
+    const args = [kaspa, poolTplCanonical, tokenTpl, utxo, lpInv, poolCovid, lpDeposit, lpPubkey, q, 4];
+    cmp('addLiquidity', MP.buildAddLiquidity(...args), SP.buildAddLiquidity(...args));
+  }
+
+  // removeLiquidity: dual-sided (both dKas and dToken positive) — the shape KRON's own VM suite proves directly.
+  {
+    const state = mkState(4040n, 202000n, 1010n);
+    const q = MP.quoteRemoveLiquidity(state, lpParams, 10n);
+    const oldInventory = 10_000_000n - state.totalShares;
+    const utxo = { transactionId: '55'.repeat(32), index: 0, state, tokenUtxo: { transactionId: '66'.repeat(32), index: 0, value: 1000n } };
+    const lpShares = { transactionId: 'aa'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), q.dShares) };
+    const lpInventory = { transactionId: '88'.repeat(32), index: 0, value: 1000n, amount: oldInventory };
+    const args = [kaspa, poolTplCanonical, tokenTpl, utxo, lpShares, poolCovid, lpPubkey, q, 4, { lpInventory }];
+    cmp('removeLiquidity (dual-sided)', MP.buildRemoveLiquidity(...args), SP.buildRemoveLiquidity(...args));
+  }
+
+  // removeLiquidity: single-sided (dToken floors to zero on a token-heavy pool) — proves the SDK correctly
+  // OMITS the LP-token output and its aStates/witness entry, matching KRON's own zero-sided-floor VM proof
+  // (covenants/native/tools/verify-pool-cp-v3.mjs "remove_zero_token_side_ok").
+  {
+    const state = mkState(1_000_000_000n, 1n, 1_000_001n);   // token-heavy pool inverted: KAS side stays positive
+    const q = MP.quoteRemoveLiquidity(state, lpParams, 1n);   // dKas floors to 999, dToken floors to 0
+    if (q.dToken !== 0n) throw new Error(`fixture no longer floors dToken to zero (got ${q.dToken}) — adjust the state`);
+    const oldInventory = 10_000_000n - state.totalShares;
+    const utxo = { transactionId: '55'.repeat(32), index: 0, state, tokenUtxo: { transactionId: '66'.repeat(32), index: 0, value: 1000n } };
+    const lpShares = { transactionId: 'aa'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), q.dShares) };
+    const lpInventory = { transactionId: '88'.repeat(32), index: 0, value: 1000n, amount: oldInventory };
+    const args = [kaspa, poolTplCanonical, tokenTpl, utxo, lpShares, poolCovid, lpPubkey, q, 4, { lpInventory }];
+    const ref = MP.buildRemoveLiquidity(...args), sdk = SP.buildRemoveLiquidity(...args);
+    cmp('removeLiquidity (single-sided, zero token)', ref, sdk);
+    const refHasLpToken = ref.outputs.some((o) => o.role === 'lpToken');
+    const sdkHasLpToken = sdk.outputs.some((o) => o.role === 'lpToken');
+    console.log(`  ${!refHasLpToken && !sdkHasLpToken ? 'PASS' : 'FAIL'}  both omit the LP-token output when dToken=0 (ref=${refHasLpToken} sdk=${sdkHasLpToken})`);
+    if (refHasLpToken || sdkHasLpToken) fails++;
+  }
 }
 
 console.log(`\n${fails === 0 ? '✓ PARITY OK — SDK builders are byte-identical to the covenant-verified reference' : '✗ ' + fails + ' PARITY MISMATCH(ES) — SDK has drifted from the covenant; do not publish'}`);
