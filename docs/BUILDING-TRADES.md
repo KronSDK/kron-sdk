@@ -94,6 +94,13 @@ Curve vs pool is decided by the token's graduation state — read it from the to
   covenant *UTXO/address* is wrong — it moves every trade. Re-read live state each time.
 - **The indexer lags a beat after a trade.** Right after your tx lands, the indexer may be one poll
   behind on the new state. Retry the state read for a few seconds before failing.
+- **`estimateNativeFee` sizes a fee, it doesn't rebuild the tx for you.** The correct sequence is
+  assemble (guess fee) → `estimateNativeFee` → **re-assemble with the real fee** → sign. Sign the
+  *second* assembly only — the fee changes the change output's value, which changes the sighash every
+  funding input's signature commits to. Signing the first (guess-fee) assembly instead broadcasts fine
+  structurally but fails with `signature invalid: malformed signature`, which looks like a builder bug
+  but is a call-order mistake. See [`docs/INTEGRATION.md`](INTEGRATION.md#signing-the-wallet-bridge) or
+  [`scripts/example-kcc20-send.mjs`](../scripts/example-kcc20-send.mjs) for the full sequence.
 
 ## Coming soon
 

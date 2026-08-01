@@ -335,12 +335,27 @@ bindings, which the chain always rejects — upgrade).
 ### Signing: the wallet bridge
 
 ```ts
-const asm = kron.spend.assembleNativeTx(k, { spend, fundingEntries, changeAddress, networkFee });
+// 1. Assemble with a GUESS fee, purely to get something the right size to measure.
+let asm = kron.spend.assembleNativeTx(k, { spend, fundingEntries, changeAddress, networkFee: 10_000n });
+// 2. Size the real fee against that assembly.
+const networkFee = kron.spend.estimateNativeFee(k, NETWORK_ID, asm, 100);
+// 3. RE-ASSEMBLE with the real fee — this changes the change output's value, which changes every
+//    funding input's sighash. Discard the first `asm`; only this second one may be signed.
+asm = kron.spend.assembleNativeTx(k, { spend, fundingEntries, changeAddress, networkFee });
 const pskt = kron.spend.toPsktJson(asm);
 const signed = await wallet.signPskt(pskt.txJsonString, pskt.signInputs); // any WalletAdapter implementation
 ```
 
-(The sighash commits to the output covenant bindings, so bindings are attached at assembly, before
+**Never sign or submit the step-1 (guess-fee) `asm`.** The sighash commits to every output's value,
+including the KAS change output — so re-assembling with the real fee from `estimateNativeFee` changes that
+output and invalidates any signature computed against the earlier assembly. Signing the wrong one surfaces
+at broadcast as `failed to verify the signature script: signature invalid: malformed signature`, which reads
+like a builder/covenant bug but is actually just an out-of-order call — the transaction was structurally
+fine. `estimateNativeFee` sizes a fee for a transaction; it does not size *and* rebuild it for you. See
+[`scripts/example-kcc20-send.mjs`](../scripts/example-kcc20-send.mjs) for a complete runnable example of the
+assemble → estimate → re-assemble → sign sequence.
+
+(The sighash also commits to the output covenant bindings, so bindings are attached at assembly, before
 signing — a signed tx can't be re-bound.)
 
 See [`docs/WALLETS.md`](WALLETS.md) for the `WalletAdapter` contract and a generic reference implementation

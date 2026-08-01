@@ -18,6 +18,7 @@
 // compiler (see README).
 import type { Kaspa } from '../wasm/kaspa.types.js';
 import { SigScriptBuilder, int8LE } from './sigscript.js';
+import { COVENANT_DUST } from './spend.js';
 import {
   type Kcc20State,
   type Kcc20Template,
@@ -146,7 +147,7 @@ export function buildCpBuy(
   // Merge tokens are presence-owned: their kcc20 witness MUST be a co-present signed P2PK funding input.
   // Input 0 is the curve covenant (no signature), so the default 0 would fail the on-chain presence check.
   if (mergeTokens.length > 0 && presenceWitnessIdx === 0) throw new Error('presenceWitnessIdx must be set to a co-present signed P2PK funding input when mergeTokens is non-empty (input 0 is the curve covenant and carries no signature)');
-  const dust = opts.tokenDust ?? 1000n;
+  const dust = opts.tokenDust ?? COVENANT_DUST;
   const curveCovidHex = hexOf(curveCovid);
   const tokenCovidHex = hexOf(utxo.state.tokenCovid);
   const newKas = utxo.realKas + kasIn;
@@ -215,7 +216,7 @@ export function buildCpSell(
   if (tokenIn <= 0n) throw new Error('tokenIn must be positive');
   if (kasOut <= 0n || kasOut % SCALE !== 0n || kasOut > utxo.realKas) throw new Error('invalid kasOut');
   if (inventory.amount !== utxo.state.tokenReserve) throw new Error('inventory.amount must equal the curve\'s committed tokenReserve');
-  const dust = opts.tokenDust ?? 1000n;
+  const dust = opts.tokenDust ?? COVENANT_DUST;
   const curveCovidHex = hexOf(curveCovid);
   const tokenCovidHex = hexOf(utxo.state.tokenCovid);
   const sellerIn = sellerTokens.reduce((s, t) => s + t.state.amount, 0n);
@@ -280,7 +281,7 @@ export function buildCpGraduate(
   if (poolLockedShares < 1n) throw new Error('poolLockedShares must be >= 1');
   if (inventory.amount !== utxo.state.tokenReserve) throw new Error('inventory.amount must equal the curve\'s committed tokenReserve');
   const lockedValue = opts.lockedCurveValue ?? 1000n;
-  const dust = opts.tokenDust ?? 1000n;
+  const dust = opts.tokenDust ?? COVENANT_DUST;
   // poolKas ≈ (1 − gradFeeBps) of the reserve, floored to a whole SCALE step; platform takes the remainder.
   const targetPoolKas = (utxo.realKas * (10000n - tpl.params.graduationFeeBps)) / 10000n;
   const poolKasUnits = targetPoolKas / SCALE;
@@ -336,7 +337,7 @@ export function buildSplitToken(
   if (!opts.tokenCovid) throw new Error('opts.tokenCovid is required (the token covenant id, hex) — both outputs need the KIP-20 covenant binding or the assembled tx fails on-chain');
   const change = sellerToken.state.amount - sellAmount;
   if (sellAmount <= 0n || change <= 0n) throw new Error('split requires 0 < sellAmount < the UTXO amount');
-  const dust = opts.tokenDust ?? 1000n;
+  const dust = opts.tokenDust ?? COVENANT_DUST;
   const owner = sellerToken.state.ownerIdentifier;
   const out1 = addressPresenceOwned(owner, sellAmount);   // the piece to sell (output 0)
   const out2 = addressPresenceOwned(owner, change);       // the change (output 1)
@@ -366,7 +367,7 @@ export function buildConsolidate(
 ): CovenantSpend {
   if (!opts.tokenCovid) throw new Error('opts.tokenCovid is required (the token covenant id, hex) — the merged output needs the KIP-20 covenant binding or the assembled tx fails on-chain');
   if (tokens.length < 2) throw new Error('consolidate needs at least 2 UTXOs');
-  const dust = opts.tokenDust ?? 1000n;
+  const dust = opts.tokenDust ?? COVENANT_DUST;
   const owner = tokens[0].state.ownerIdentifier;
   const total = tokens.reduce((s, t) => s + t.state.amount, 0n);
   const merged = addressPresenceOwned(owner, total);

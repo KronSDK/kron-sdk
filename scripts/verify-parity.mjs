@@ -163,29 +163,46 @@ console.log(`\nparity: SDK dist vs kron reference builders (curve template ${cur
 {
   const inv = { transactionId: '11'.repeat(32), index: 0, value: 1000n, amount: 500000n };
   const utxo = { transactionId: ZERO_COVID, index: 0, realKas: 0n, state: { graduated: false, tokenCovid: bytesOf(TOKEN_COVID), tokenReserve: 500000n } };
-  const a = [kaspa, curveTpl, tokenTpl, utxo, inv, bytesOf(CURVE_COVID), bytesOf(BUYER), 1000000n, 99n, [], 0, {}];
+  const a = [kaspa, curveTpl, tokenTpl, utxo, inv, bytesOf(CURVE_COVID), bytesOf(BUYER), 1000000n, 99n, [], 0, { tokenDust: 50_000_000n }];
   cmp('buy (dev-fund ABI)', M.buildCpBuy(...a), S.buildCpBuy(...a));
-  const aL = [kaspa, curveTplLegacy, tokenTpl, utxo, inv, bytesOf(CURVE_COVID), bytesOf(BUYER), 1000000n, 99n, [], 0, {}];
+  const aL = [kaspa, curveTplLegacy, tokenTpl, utxo, inv, bytesOf(CURVE_COVID), bytesOf(BUYER), 1000000n, 99n, [], 0, { tokenDust: 50_000_000n }];
   cmp('buy (legacy two-fee ABI)', M.buildCpBuy(...aL), S.buildCpBuy(...aL));
 }
 {
   const inv = { transactionId: '22'.repeat(32), index: 0, value: 1000n, amount: 400000n };
   const utxo = { transactionId: ZERO_COVID, index: 0, realKas: 10000000n, state: { graduated: false, tokenCovid: bytesOf(TOKEN_COVID), tokenReserve: 400000n } };
   const seller = { transactionId: '33'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(TRADER), 500n) };
-  const a = [kaspa, curveTpl, tokenTpl, utxo, [seller], inv, bytesOf(CURVE_COVID), bytesOf(TRADER), 160n, 2000000n, 3, {}];
+  const a = [kaspa, curveTpl, tokenTpl, utxo, [seller], inv, bytesOf(CURVE_COVID), bytesOf(TRADER), 160n, 2000000n, 3, { tokenDust: 50_000_000n }];
   cmp('sell (fractional, change — dev-fund ABI)', M.buildCpSell(...a), S.buildCpSell(...a));
   const s2 = { transactionId: '33'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(TRADER), 160n) };
-  const a2 = [kaspa, curveTpl, tokenTpl, utxo, [s2], inv, bytesOf(CURVE_COVID), bytesOf(TRADER), 160n, 2000000n, 3, {}];
+  const a2 = [kaspa, curveTpl, tokenTpl, utxo, [s2], inv, bytesOf(CURVE_COVID), bytesOf(TRADER), 160n, 2000000n, 3, { tokenDust: 50_000_000n }];
   cmp('sell (full-UTXO — dev-fund ABI)', M.buildCpSell(...a2), S.buildCpSell(...a2));
   // The dev-fund output sits at the FIXED index 4, so on a fractional sell the covid-A change shifts to [5].
-  const aL = [kaspa, curveTplLegacy, tokenTpl, utxo, [seller], inv, bytesOf(CURVE_COVID), bytesOf(TRADER), 160n, 2000000n, 3, {}];
+  const aL = [kaspa, curveTplLegacy, tokenTpl, utxo, [seller], inv, bytesOf(CURVE_COVID), bytesOf(TRADER), 160n, 2000000n, 3, { tokenDust: 50_000_000n }];
   cmp('sell (fractional, change — legacy two-fee ABI)', M.buildCpSell(...aL), S.buildCpSell(...aL));
 }
 {
   const inv = { transactionId: '11'.repeat(32), index: 0, value: 1000n, amount: 2500n };
   const utxo = { transactionId: ZERO_COVID, index: 0, realKas: BigInt(graduationKas), state: { graduated: false, tokenCovid: bytesOf(TOKEN_COVID), tokenReserve: 2500n } };
-  const a = [kaspa, curveTpl, tokenTpl, poolV2Tpl, utxo, inv, bytesOf(CURVE_COVID), BigInt(POOL_LOCKED), {}];
+  const a = [kaspa, curveTpl, tokenTpl, poolV2Tpl, utxo, inv, bytesOf(CURVE_COVID), BigInt(POOL_LOCKED), { tokenDust: 50_000_000n }];
   cmp('graduate', M.buildCpGraduate(...a), S.buildCpGraduate(...a));
+}
+
+// --- curve buy/sell default-dust safety (KRN-SDK-DUST, extended to curveCpTx.ts) --------------------------
+// buildCpBuy/buildCpSell/buildCpGraduate carried the same unsafe bare-1000n default as the pool builders —
+// this SDK's 0.13.3 release fixed only the pool builders; the curve builders were still emitting sub-dust
+// covenant token outputs. `ref` (kron's private reference, which always overrides tokenDust explicitly) is
+// EXPECTED to stay at legacy 1000n here — that documents the reference is untouched, not a regression.
+{
+  console.log('\ncurve buy/sell default-dust safety (SDK vs kron reference)');
+  const inv = { transactionId: '11'.repeat(32), index: 0, value: 1000n, amount: 500000n };
+  const utxo = { transactionId: ZERO_COVID, index: 0, realKas: 0n, state: { graduated: false, tokenCovid: bytesOf(TOKEN_COVID), tokenReserve: 500000n } };
+  const a = [kaspa, curveTpl, tokenTpl, utxo, inv, bytesOf(CURVE_COVID), bytesOf(BUYER), 1000000n, 99n, [], 0];
+  const ref = M.buildCpBuy(...a), sdk = S.buildCpBuy(...a);
+  const buyerOutIdx = 2; // outputs: [curve(0), inventory(1), buyerOut(2), creatorFee, platformFee, ...] — buyerOut carries `dust`
+  const okBuy = ref.outputs[buyerOutIdx].value === 1000n && sdk.outputs[buyerOutIdx].value === 50_000_000n;
+  console.log(`  ${okBuy ? 'PASS' : 'FAIL'}  unset tokenDust on buy: reference stays at legacy 1000n, SDK now defaults to safe COVENANT_DUST (ref=${ref.outputs[buyerOutIdx].value} sdk=${sdk.outputs[buyerOutIdx].value})`);
+  if (!okBuy) fails++;
 }
 
 // --- token-list canonicalizer parity (backend/tokenListSignature.mjs ↔ this SDK's verify module) --

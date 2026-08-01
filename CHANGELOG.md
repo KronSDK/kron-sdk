@@ -3,6 +3,18 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.13.4
+
+### Fixed — curve `buildCpBuy`/`buildCpSell`/`buildCpGraduate` had the same sub-dust `tokenDust` default as 0.13.3's pool builders
+
+**If you call `buildCpBuy`, `buildCpSell`, or `buildCpGraduate` without an explicit `opts.tokenDust`, this
+release is required.** 0.13.3 fixed this default on the pool builders only; the curve (bonding-curve) builders
+carried the identical bare-`1000n` default and were missed. Same failure mode: covenant-valid but absurdly
+expensive to relay. Reported and confirmed by a community integrator testing 0.13.3 against real curve buys.
+
+All curve builders now default unset `tokenDust` to `COVENANT_DUST` (50,000,000 sompi), matching every other
+builder in the package. **Upgrading is the whole fix.**
+
 ## 0.13.3
 
 ### Fixed — pool add/remove/swap builders defaulted unset `tokenDust` to sub-dust 1000 sompi
