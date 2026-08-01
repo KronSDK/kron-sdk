@@ -72,6 +72,13 @@ is what guarantees you compile the exact same script (byte-for-byte) that KRON's
 Curve vs pool is decided by the token's graduation state — read it from the token record / live state
 (a graduated token trades on the pool; a pre-graduation token on the curve).
 
+> **Pool swaps require ≥ 0.13.1.** Earlier releases quoted the voluntary-LP retention with a floor where the
+> covenant takes a ceiling, so the node rejected the swap with `script ran, but verification failed`. It was
+> state-dependent — token-heavy pools failed almost every time, balanced pools intermittently — so the same
+> code could appear to work and then stop. Always pass the quote straight from `quotePoolV3Buy` /
+> `quotePoolV3Sell` into the builder; never hand-roll `newToken` or `tokenOut`, because the covenant
+> re-derives the retention itself and rejects anything that disagrees by even one unit.
+
 ## What's public and where to look
 
 - **Builders** (the assemble half): `curveCp` and `poolCpV3` namespaces in `@kronsdk/kron-sdk`

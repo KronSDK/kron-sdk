@@ -10,7 +10,7 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > mempool refuses them (`under the required amount … for normalized transient mass`). Both scale with
 > transaction size, so they fail on real trades rather than small tests. See the [CHANGELOG](CHANGELOG.md).
 >
-> **Status: v0.13.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.13.1, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract and how to
 > adapt it to a specific wallet's injected provider. **0.7.0** added cross-wallet **provider discovery**
@@ -26,7 +26,11 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > mass) and right-sizes the per-input compute budgets; **0.12.0** adds token-list platform-signature
 > verification (`verify.verifyTokenListSignature`) and makes the release parity gate fail closed;
 > **0.13.0** moves partner attribution on-chain (pass `ref` to `assembleNativeTx`) so integrator trades
-> are credited regardless of submission route — see the [CHANGELOG](CHANGELOG.md).
+> are credited regardless of submission route; **0.13.1** fixes AMM **pool swaps**, which the node rejected
+> with `script ran, but verification failed` because the voluntary-LP retention in `quotePoolCpBuy` /
+> `quotePoolCpSell` floored where the covenant takes a ceiling — token-heavy pools failed almost always and
+> balanced pools intermittently, so **upgrade if you trade graduated tokens** — see the
+> [CHANGELOG](CHANGELOG.md).
 >
 > **⚠️ On an old pinned version? `npm install @kronsdk/kron-sdk@latest`.** Releases before 0.6.0 built
 > **version-0** transactions, which cannot carry the covenant bindings Kaspa's covenant layer (KIP-20)
@@ -69,7 +73,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.13.0      # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.13.1      # or pin an exact version for reproducible builds
 ```
 
 The package follows semver — **just install `@latest`**; there's no reason to pin an older release. Anything

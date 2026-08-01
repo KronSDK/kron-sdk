@@ -3,6 +3,62 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.13.1
+
+### Fixed — pool swaps were rejected on-chain
+
+**If you trade graduated tokens (AMM pool swaps), this release is required.** `buildPoolV3SwapKasForToken`
+and `buildPoolV3SwapTokenForKas` produced transactions the node rejected with:
+
+```
+failed to verify the signature script: script ran, but verification failed
+```
+
+The builders were never the problem — the **quote** was. `retainKasUnits` (the voluntary-LP yield kept
+in-pool on each trade) computed two nested integer *floors*, while the covenant computes an anti-partition
+*ceiling*. The covenant changed to the ceiling on 2026-07-14 and this copy did not follow.
+
+A retention one unit too small makes `quotePoolCpBuy` derive a `newToken` one unit too small — i.e. it offers
+the buyer one retain-unit too many tokens. The covenant recomputes the real retention and rejects on its
+constant-product check, `require((newKas - retainKas) * newToken >= oldK)`.
+
+**Rejection was state-dependent, not random**, which made it hard to recognise: it bites whenever the extra
+unit crosses a ceiling boundary, with probability roughly `tokenReserve / kasReserve`. Token-heavy pools
+failed nearly every time; balanced pools failed intermittently, so the same code could work and then stop
+working with no change on your side. Both directions (buy and sell) and every covenant schema are affected.
+
+Curve trades were never affected — `curve_cp` has no retention term.
+
+**Upgrading is the whole fix.** No API change, no call-site change.
+
+If you cannot upgrade immediately, `buildPoolV3SwapKasForToken` itself is correct — only the quote handed to
+it is wrong. Recompute the retention with a ceiling and pass the corrected quote:
+
+```ts
+const ceilDiv = (a: bigint, b: bigint) => (a + b - 1n) / b;
+const weight = lpFeeBps * (totalShares - lockedShares);
+const retainKas = weight <= 0n ? 0n : ceilDiv(kasInUnits * weight, 10000n * totalShares);
+const newToken = ceilDiv(kasReserve * tokenReserve, kasReserve + kasInUnits - retainKas);
+const q2 = { ...q, newToken, tokenOut: tokenReserve - newToken };
+```
+
+Fee outputs and `newKas` in the quote are already correct — leave them alone. Note the corrected quote returns
+one retain-unit fewer tokens, so any pre-trade figure you display shifts very slightly.
+
+### Fixed — the release parity gate now covers the pool path
+
+This drifted silently because `scripts/verify-parity.mjs` compared only the **curve** builders against KRON's
+production code. The pool quotes and builders were never checked, so the covenant could move without the gate
+noticing. The gate now also compares `quotePoolCpBuy` / `quotePoolCpSell` across a spread of pool shapes and
+trade sizes — including live mainnet pool states — because a single canonical case does not surface an
+off-by-one whose visibility depends on the reserve ratio.
+
+### Known issue — liquidity provision
+
+`buildRemoveLiquidity` does not yet supply the pool's canonical LP-share inventory input required by current
+covenant schemas, so **remove-liquidity is expected to be rejected on recently-launched pools**. Swaps, curve
+trades and `addLiquidity` are unaffected. A fix is planned for the next release; if you need it sooner, say so.
+
 ## 0.13.0
 
 ### Added — partner attribution now works regardless of how you submit
