@@ -29,6 +29,11 @@ const REF_CURVE = `${KRON}/web/src/native/curveCpTx.ts`;
 // KRN-SDK-POOL (0.13.1): the POOL builders were never gated here, only the curve — which is exactly how
 // retainKasUnits drifted from the covenant's anti-partition ceiling to two nested floors and shipped a quote
 // the VM rejects. Any exported function the SDK re-implements must have a reference here or it can rot.
+// KRN-SDK-CURVE (0.14.1): the curve QUOTES were never gated either — only the curve BUILDERS above and the
+// POOL quotes below. That gap is exactly how `quoteCpSell` shipped a NEGATIVE `net` into BOTH repos at once:
+// each fee leg is padded to FEE_OUT_MIN, so on a small sell the fixed floor exceeds the gross payout and the
+// seller pays to sell, while the only smallness guard bounds the GROSS.
+const REF_CPCURVE = `${KRON}/web/src/cpCurve.ts`;
 const REF_POOL = `${KRON}/web/src/native/poolCpTx.ts`;
 const REF_POOL_V3 = `${KRON}/web/src/native/poolCpV3Tx.ts`;
 const REF_BUDGETS = `${KRON}/web/src/native/covenantTxV1.ts`;   // per-input compute budgets live here, not in the builders
@@ -42,7 +47,7 @@ if (!existsSync(SDK_DIST)) {
   console.error(`   KRON_PARITY_OPTIONAL does not skip this.)`);
   process.exit(1);
 }
-const missing = [SILVERC, KWASM_JS, REF_CURVE].filter((p) => !existsSync(p));
+const missing = [SILVERC, KWASM_JS, REF_CURVE, REF_CPCURVE].filter((p) => !existsSync(p));
 if (missing.length) {
   const detail = `missing: ${missing.map((p) => p.replace(SDK, '.')).join(', ')}`;
   if (process.env.KRON_PARITY_OPTIONAL === '1') {
@@ -203,6 +208,82 @@ console.log(`\nparity: SDK dist vs kron reference builders (curve template ${cur
   const okBuy = ref.outputs[buyerOutIdx].value === 1000n && sdk.outputs[buyerOutIdx].value === 50_000_000n;
   console.log(`  ${okBuy ? 'PASS' : 'FAIL'}  unset tokenDust on buy: reference stays at legacy 1000n, SDK now defaults to safe COVENANT_DUST (ref=${ref.outputs[buyerOutIdx].value} sdk=${sdk.outputs[buyerOutIdx].value})`);
   if (!okBuy) fails++;
+}
+
+// --- curve QUOTE parity + net-positivity invariant (KRN-SDK-CURVE) ------------------------------
+// TWO checks, and they do DIFFERENT jobs. Keeping both is the point of this block:
+//   (1) PARITY — ref vs sdk, full-object. Catches DRIFT (one repo patched, the other not). It would NOT have
+//       caught the original negative-net bug: both copies were identically wrong, so parity passed clean.
+//   (2) INVARIANT — reference-independent: a returned sell quote must have net > 0. THIS is the check that
+//       catches a value-destroying quote, on either side, regardless of what the other side says.
+// The sweep is deliberately dense in the SMALL-SELL band, where the padded fee floor dominates — a coarse
+// log sweep of large trades never enters it, which is why nothing noticed for so long.
+{
+  console.log('\ncurve quote parity + net-positivity invariant (SDK vs kron reference)');
+  const MC = await import(pathToFileURL(REF_CPCURVE).href);
+  const SC = SDK_MOD.curve;
+  const j = (q) => (q == null ? 'null' : JSON.stringify(q, (_, v) => (typeof v === 'bigint' ? v.toString() : v)));
+  // Both ABIs: the 2-leg legacy shape has a different floor (0.4 KAS) and so a different boundary.
+  const abis = [
+    ['3-leg dev-fund ABI', { creatorFeeBps: 25n, platformFeeBps: 90n, devFundBps: 10n }],
+    ['2-leg legacy ABI', { creatorFeeBps: 25n, platformFeeBps: 90n }],
+  ];
+  // Live mainnet curve shapes — shallow reserves are the risk case.
+  const shapes = [
+    ['SOKKER-like (2.42 KAS raised)', 242_000_000n, 411_592_931n, 10_769_230n],
+    ['CHONK-like (1.03 KAS raised)', 103_000_000n, 989_987_763n, 3_750_000n],
+    ['NOSE-like (4.89 KAS raised)', 489_000_000n, 899_940_151n, 6_499_675n],
+    ['deep curve (5000 KAS raised)', 500_000_000_000n, 600_000_000n, 6_250_000n],
+    ['fresh curve (0 raised)', 0n, 1_000_000_000n, 6_250_000n],
+  ];
+  let checked = 0, drift = 0, nonPositive = 0, shown = 0;
+  const say = (m) => { if (shown++ < 6) console.log(m); else if (shown === 7) console.log('  … (further violations suppressed)'); };
+  for (const [label, realKas, tokenReserve, vKas] of shapes) for (const [abiName, bps] of abis) {
+    const st = { realKas, tokenReserve, vKas, graduationKas: 25_000_000_000_000n, ...bps };
+    const sizes = new Set();
+    for (let e = 0; e <= 12; e++) { const b = 10n ** BigInt(e); for (const m of [1n, 2n, 5n, 7n]) sizes.add(b * m); }
+    const step = tokenReserve / 100000n || 1n;                    // dense walk of the small-sell band
+    for (let i = 1n; i <= 400n; i++) sizes.add(i * step);
+    for (const tokenIn of [...sizes].sort((a, b) => (a < b ? -1 : 1))) {
+      let a, b;
+      try { a = MC.quoteCpSell(st, tokenIn); } catch { a = null; }
+      try { b = SC.quoteCpSell(st, tokenIn); } catch { b = null; }
+      checked++;
+      if (j(a) !== j(b)) {
+        drift++; fails++;
+        say(`  FAIL  quoteCpSell drift — ${abiName} / ${label} tokenIn=${tokenIn}`);
+      }
+      // A sell whose net <= 0 hands the seller's tokens to the curve AND their KAS to the fee owners.
+      // `null` is the contract for "not sellable"; a net<=0 OBJECT is a quote that destroys the caller's funds.
+      for (const [side, q] of [['kron', a], ['sdk', b]]) {
+        if (q && q.net <= 0n) {
+          nonPositive++; fails++;
+          say(`  FAIL  ${side} quoteCpSell returned net<=0 — ${abiName} / ${label} tokenIn=${tokenIn} kasOut=${q.kasOut} fee=${q.fee} net=${q.net}`);
+        }
+        if (q && (q.fee !== q.creatorFee + q.platformFee + q.devFundFee || q.net !== q.kasOut - q.fee)) {
+          fails++; say(`  FAIL  ${side} quoteCpSell fee/net decomposition broken — ${abiName} / ${label} tokenIn=${tokenIn}`);
+        }
+      }
+    }
+    // minOutWithSlippage: same module, same export. An UNCLAMPED tolerance above 100% returns a NEGATIVE
+    // floor, which silently disables the `quote.net < opts.minOut` slippage gate in the trade flows.
+    for (const out of [0n, 1n, 1000n, 1_000_000_000n]) for (const bps of [-500, 0, 1, 100, 5000, 10000, 15000, 1e6]) {
+      checked++;
+      const a = String(MC.minOutWithSlippage(out, bps)), b = String(SC.minOutWithSlippage(out, bps));
+      if (a !== b) { drift++; fails++; say(`  FAIL  minOutWithSlippage drift — out=${out} bps=${bps} kron=${a} sdk=${b}`); }
+      if (BigInt(a) < 0n || BigInt(b) < 0n) { fails++; say(`  FAIL  minOutWithSlippage went NEGATIVE — out=${out} bps=${bps}`); }
+    }
+    // Buy side: no positivity hazard (the fee is charged ON TOP of kasIn), but the same padded-leg code path.
+    for (const kas of [1n, 5n, 50n, 500n, 5000n, 50000n, 500000n]) {
+      let a, b;
+      try { a = MC.quoteCpBuy(st, kas * 1_000_000n); } catch { a = null; }
+      try { b = SC.quoteCpBuy(st, kas * 1_000_000n); } catch { b = null; }
+      checked++;
+      if (j(a) !== j(b)) { drift++; fails++; say(`  FAIL  quoteCpBuy drift — ${abiName} / ${label} kasIn=${kas * 1_000_000n}`); }
+    }
+  }
+  console.log(`  ${drift === 0 ? 'PASS' : 'FAIL'}  ${checked} curve quotes compared across ${shapes.length} shapes x ${abis.length} ABIs (drift=${drift})`);
+  console.log(`  ${nonPositive === 0 ? 'PASS' : 'FAIL'}  net-positivity invariant: no returned sell quote has net<=0 (violations=${nonPositive})`);
 }
 
 // --- token-list canonicalizer parity (backend/tokenListSignature.mjs ↔ this SDK's verify module) --
