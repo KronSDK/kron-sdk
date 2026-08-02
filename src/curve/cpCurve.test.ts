@@ -53,3 +53,46 @@ describe('dev-fund fee leg', () => {
     expect(quoteCpBuy(devFund, kasIn)!.total - quoteCpBuy(base, kasIn)!.total).toBe(100_000_000n);
   });
 });
+
+// A sell whose gross kasOut falls below the PADDED fee floor nets NEGATIVE: each fee leg is floored at
+// FEE_OUT_MIN (0.2 KAS), so the three legs cost a fixed 0.6 KAS regardless of trade size, and the seller hands
+// over tokens AND pays KAS to sell them. The only pre-existing smallness guard bounds the GROSS kasOut, never
+// the net. `null` is this function's declared "not sellable" contract — an integrator who never reads a
+// changelog reads `.net`, and a negative number there builds a value-destroying transaction.
+describe('quoteCpSell net-positivity (padded fee floor)', () => {
+  // A real live mainnet curve shape (NOSE, ~4.89 KAS raised) — shallow curves are where the floor bites.
+  const live: CpState = {
+    realKas: 489_000_000n, tokenReserve: 899_940_151n, vKas: 6_499_675n,
+    graduationKas: 25_998_700_000_000n, creatorFeeBps: 25n, platformFeeBps: 90n, devFundBps: 10n,
+  };
+
+  it('returns null instead of a negative-net quote', () => {
+    expect(quoteCpSell(live, 1_000n)).toBeNull();   // gross ~0.07 KAS against a 0.6 KAS fee floor
+  });
+
+  it('rejects an exactly-zero net (the seller gains nothing but still pays the network fee)', () => {
+    const q = quoteCpSell(live, 8_445n);
+    if (q) expect(q.net).toBeGreaterThan(0n);       // 8,445 grosses exactly 0.60 KAS ⇒ net exactly 0
+  });
+
+  it('does NOT over-block: the first net-positive size still quotes', () => {
+    const q = quoteCpSell(live, 8_446n)!;
+    expect(q.kasOut).toBe(61_000_000n);             // 0.61 KAS gross
+    expect(q.fee).toBe(60_000_000n);                // 3 x FEE_OUT_MIN — every leg still padded
+    expect(q.net).toBe(1_000_000n);                 // 0.01 KAS
+  });
+
+  it('never returns a non-positive net anywhere in the small-sell band', () => {
+    for (let t = 1n; t <= 20_000n; t += 37n) {
+      const q = quoteCpSell(live, t);
+      if (q) expect(q.net).toBeGreaterThan(0n);
+    }
+  });
+
+  it('leaves an ordinary-size sell untouched', () => {
+    const deep: CpState = { ...live, realKas: 500_000_000_000n, tokenReserve: 1_000_000_000n, vKas: 6_250_000n };
+    const q = quoteCpSell(deep, 1_000_000n)!;
+    expect(q.net).toBe(q.kasOut - q.fee);
+    expect(q.net).toBeGreaterThan(6_000_000_000n);  // ~66 KAS — unaffected by the guard
+  });
+});

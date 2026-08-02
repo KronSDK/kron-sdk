@@ -77,6 +77,13 @@ export function quoteCpSell(s: CpState, tokenIn: bigint): CpSellQuote | null {
   const platformFee = padFee((kasOut * s.platformFeeBps) / 10000n);
   const devFundFee = devFundFeeOf(s, kasOut);
   const fee = creatorFee + platformFee + devFundFee;
+  // Each fee leg is padded to FEE_OUT_MIN, so on a small sell the FIXED floor (0.6 KAS on the 3-leg dev-fund
+  // ABI, 0.4 KAS on the 2-leg legacy one) can exceed the gross kasOut — the seller would hand over tokens AND
+  // pay KAS to sell them. The `kasOutUnits <= 0n` guard above bounds the GROSS only, never the net. `null` is
+  // this function's existing "not sellable" contract, so every caller already handles it.
+  // Not over-blocking: net is strictly increasing in kasOut (slope 1 − totalBps/10000 > 0, padFee is
+  // non-decreasing), so there is a single sign crossing and this rejects exactly the value-destroying band.
+  if (kasOut - fee <= 0n) return null;
   return { tokenIn, kasOut, creatorFee, platformFee, devFundFee, fee, net: kasOut - fee, newRealKas: s.realKas - kasOut, newTokenReserve: newToken };
 }
 

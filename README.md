@@ -10,7 +10,7 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > mempool refuses them (`under the required amount … for normalized transient mass`). Both scale with
 > transaction size, so they fail on real trades rather than small tests. See the [CHANGELOG](CHANGELOG.md).
 >
-> **Status: v0.14.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.14.1, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract and how to
 > adapt it to a specific wallet's injected provider. **0.7.0** added cross-wallet **provider discovery**
@@ -38,7 +38,11 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > call any of these without an explicit `tokenDust`**; **0.14.0** adds the counterfeit-LP defence — pools that
 > graduated before the covenant guard (`ansem`/`kron` + tokens still on the curve) can be counterfeit-bound so
 > added liquidity is drained, so **gate `poolCp.buildAddLiquidity` on `IndexerClient.assertLpBindSafe(tick)`** —
-> see the [CHANGELOG](CHANGELOG.md).
+> see the [CHANGELOG](CHANGELOG.md); **0.14.1** stops `curve.quoteCpSell` / `poolCp.quotePoolCpSell` returning a
+> **negative `net`** on small sells — every fee output is padded to a 0.2 KAS floor, so below ~0.61 KAS of
+> proceeds (curve) or ~0.41 KAS (pool) the fixed fee exceeded the payout and the seller paid to sell. Both now
+> return `null`, the same "not sellable" contract they already used, so **if you render `.net` you are fixed by
+> upgrading with no code change** — see the [CHANGELOG](CHANGELOG.md).
 >
 > **⚠️ On an old pinned version? `npm install @kronsdk/kron-sdk@latest`.** Releases before 0.6.0 built
 > **version-0** transactions, which cannot carry the covenant bindings Kaspa's covenant layer (KIP-20)
@@ -81,7 +85,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.13.4      # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.14.1      # or pin an exact version for reproducible builds
 ```
 
 The package follows semver — **just install `@latest`**; there's no reason to pin an older release. Anything
@@ -118,6 +122,12 @@ const cpState = {
 const quote = kron.curve.quoteCpBuy(cpState, 10_000_000_000n); // 100 KAS in
 if (!quote) throw new Error('quote failed — bad amount or curve state');
 console.log(`100 KAS -> ${quote.tokenOut} tokens, fee ${quote.fee} sompi`);
+
+// Selling: ALWAYS handle the null. Every fee output is padded to a 0.2 KAS floor, so a small sell can cost
+// more in fixed fees than it returns. Since 0.14.1 `quoteCpSell` returns null there rather than a quote with
+// a negative `net` — treat null as "amount too small to sell", not as an error.
+const sell = kron.curve.quoteCpSell(cpState, 5_000n);
+if (!sell) console.log('too small to sell — the fixed fee outputs cost more than this returns');
 
 // 3. Build the covenant spend against the LIVE curve. `cpTemplate`/`tokenTemplate` need the target's
 //    already-compiled script bytes + state offset — read them from your indexer's UTXO data

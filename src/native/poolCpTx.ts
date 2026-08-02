@@ -214,6 +214,10 @@ export function quotePoolCpSell(state: PoolCpState, p: PoolCpParams, tokenIn: bi
   const creatorFloorRent = (lpFee * p.lockedShares) / state.totalShares;
   const creatorOut = padFee(creatorFee + creatorFloorRent);
   const platformOut = padFee(platformFee);
+  // Both fee outputs are padded to FEE_OUT_MIN, so below a 0.4 KAS gross the fixed floor exceeds the proceeds
+  // and the seller pays to sell. Same reasoning (and the same `null` contract) as quoteCpSell on the curve —
+  // the guards above bound kasOutUnits and the reserve, never the net. See cpCurve.ts:quoteCpSell.
+  if (kasOut - creatorOut - platformOut <= 0n) return null;
   return { tokenIn, kasOutUnits, kasOut, creatorFee, creatorFloorRent, platformFee, lpFee, creatorOut, platformOut, net: kasOut - creatorOut - platformOut, newKas, newToken };
 }
 

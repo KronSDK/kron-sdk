@@ -3,6 +3,38 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.14.1
+
+### Fixed — `quoteCpSell` / `quotePoolCpSell` could return a NEGATIVE `net` (the seller pays to sell)
+
+**Upgrade if you quote or build sells.** Every fee output is padded to `FEE_OUT_MIN` (0.2 KAS) because a
+sub-dust output blows the KIP-9 storage-mass cap. That makes the fee a *fixed floor* on small trades — 0.6 KAS
+on the curve (creator + platform + dev-fund) and 0.4 KAS on a graduated pool (creator + platform). Both sell
+quotes subtracted that floor from the gross and returned the result unguarded, so below the floor `net` went
+negative: the seller handed over tokens **and** paid KAS for the privilege. The only pre-existing smallness
+guard bounded the *gross* payout (`kasOutUnits <= 0n`), never the net.
+
+- `curve.quoteCpSell` and `poolCp.quotePoolCpSell` now return `null` when `net <= 0`, instead of a quote whose
+  `net` is negative or zero.
+- **No API change and no code change required.** `null` is the same "not sellable" contract both functions
+  already used for an amount below one SCALE step, and both return types were already `… | null`. If you
+  render `.net`, or pass a quote to `buildCpSell`, upgrading is sufficient. Treat `null` as *"amount too small
+  to sell"* rather than an error.
+- **Not over-blocking.** `net` is strictly increasing in the gross payout (slope `1 − totalBps/10000`, and
+  `padFee` is non-decreasing), so there is exactly one sign crossing: the guard rejects precisely the band
+  where the seller loses money and nothing above it. On a live mainnet curve the boundary is exact — the
+  smallest net-positive sell quotes normally, and one token less is refused.
+- `curve.minOutWithSlippage` already clamped its tolerance to `[0, 10000]` bps; KRON's copy did not, and the
+  two are now byte-identical again. An unclamped tolerance above 100% returns a *negative* min-out, which
+  silently disables the slippage floor a caller passes to the trade flows.
+
+Rough sizes, if you surface a minimum to users: the threshold is ~0.61 KAS of proceeds on a curve and ~0.41 KAS
+on a pool, but in **token** terms it depends entirely on unit price — across live mainnet markets it ranges
+from 1 token to ~16,000. Compute it per token rather than hard-coding a constant.
+
+No assembled transaction bytes change for any sell that was worth building, so the release parity gate stays
+byte-identical.
+
 ## 0.14.0
 
 ### Added — counterfeit-LP defence for pre-`e5469a7ad482` pools (gate `buildAddLiquidity`)
