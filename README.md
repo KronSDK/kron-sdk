@@ -131,8 +131,15 @@ if (!sell) console.log('too small to sell — the fixed fee outputs cost more th
 
 // 3. Build the covenant spend against the LIVE curve. `cpTemplate`/`tokenTemplate` need the target's
 //    already-compiled script bytes + state offset — read them from your indexer's UTXO data
-//    (redeemScriptHex etc.), this package doesn't compile them. curveUtxo/inventoryUtxo also come from
-//    the indexer. See docs/INTEGRATION.md for the full flow.
+//    (redeemScriptHex etc.), this package doesn't compile them.
+//
+//    curveUtxo/inventoryUtxo: fetch these via `client.SequencerClient.curveHead(curveCovid)`, NOT by
+//    deriving the curve's address yourself from the indexer's `cpState.tokenReserve` and searching for
+//    its UTXO — the curve's on-chain address changes on every trade (tokenReserve is spliced into the
+//    redeem script), so that derive-then-search races the indexer's poll lag and intermittently fails
+//    with "no curve UTXO found" on busy curves. `curveHead()` returns the current spendable outpoint
+//    (confirmed or still-unconfirmed) directly. See docs/INTEGRATION.md §4 "Curve state" + §6 for the
+//    full flow, including the indexer-only fallback if you can't reach the sequencer.
 // const spend = kron.curveCp.buildCpBuy(k, cpTemplate, tokenTemplate, curveUtxo, inventoryUtxo, ...);
 // const asm = kron.spend.assembleNativeTx(k, { spend, fundingEntries, changeAddress, networkFee });
 // const pskt = kron.spend.toPsktJson(asm);
