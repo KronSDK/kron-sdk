@@ -187,6 +187,30 @@ This is the confirmed pool head — the outpoint of the live pool covenant UTXO 
 builder needs this to construct the next pool-spending tx. (For high-contention pools, get the *in-flight*
 head from the sequencer instead — §6.)
 
+### Curve state (pre-graduation trades)
+
+There is **no indexer `curvehead` endpoint** — unlike the pool, the indexer doesn't hand you a
+ready-to-spend curve outpoint. This is a common integration trap, so read this before wiring up
+curve buys/sells:
+
+- **Use `sequencer.curveHead(curveCovid)` for the live outpoint** (§6, `SequencerClient.curveHead`).
+  This is the correct way to fetch curve state right before building a trade — it returns the
+  current spendable outpoint + reserves directly, including a still-unconfirmed prior trade, so
+  you build on the real tip instead of racing the indexer. Do this even on a quiet curve; it's
+  cheap and avoids the failure mode below entirely.
+- **Why going straight to the indexer is racy:** the curve covenant's on-chain address is
+  state-dependent (its committed `tokenReserve` is spliced into the redeem script), so the curve
+  moves to a *new address every trade*. If you derive that address yourself from
+  `indexer.token(tick)`'s `cpState.tokenReserve` right after a trade lands, the indexer can lag
+  its own poll interval before that field updates — you'll compute the address the curve *was*
+  at, not the one it's at now, and the UTXO lookup comes back empty. On an actively-traded curve
+  this produces exactly this failure: a buy fails a few times a few seconds apart with "no curve
+  UTXO found / state moved", then a retry succeeds once the indexer catches up.
+- **If you must fall back to the indexer** (sequencer unreachable), retry the derive-address →
+  look-up-UTXO step rather than failing on the first miss. KRON's own web app retries **5 times,
+  1.5s apart (~6s total)** before giving up — treat that as the minimum backoff, not a starting
+  point to shrink.
+
 ### LP positions
 
 ```
@@ -483,8 +507,12 @@ Complete runnable version: [`scripts/example-kcc20-send.mjs`](../scripts/example
 ### TG bot — buy on the curve
 
 1. `indexer.token(tick)` → confirm `graduated: false`, read curve state for a quote (`kron.curve.quoteCpBuy`).
-2. Build `curve_cp.buy` (`kron.curveCp.buildCpBuy`), user signs, submit to node.
-3. Watch `indexer.stream({tick})` for confirmation, then re-read the balance.
+2. `sequencer.curveHead(curveCovid)` for the live spendable outpoint — see §4 "Curve state" and
+   §6. Don't derive the curve's address yourself from indexer state and search for its UTXO; that
+   path races the indexer and intermittently fails on busy curves.
+3. Build `curve_cp.buy` (`kron.curveCp.buildCpBuy`) against that head, user signs, submit
+   (`sequencer.curveSubmit`, or direct to the node).
+4. Watch `indexer.stream({tick})` for confirmation, then re-read the balance.
 
 ### TG bot / wallet — swap a graduated token
 
