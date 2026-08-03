@@ -19,6 +19,11 @@ export * as spend from './native/spend.js';
 /** On-chain partner attribution tag (encode/parse + REF_RE). Pass `ref` to `spend.assembleNativeTx` to tag a
  *  trade; use `parsePartnerTag` to read a tag back off a transaction payload from chain. */
 export * as partnerTag from './native/partnerTag.js';
+/** Covenant UTXO SELECTION — read this before writing your own. A KCC-20 UTXO's native KAS value is not
+ *  part of its identity and is not predictable: no covenant pins it, and a different implementation may
+ *  simply use a different default (this SDK did, before 0.13.3). Select by lineage, read the value from
+ *  the entry you spend, and size funding with `carrierShortfall`. See docs/INTEGRATING-KCC20-UTXOS.md. */
+export * as covenantSelect from './native/covenantSelect.js';
 export * as kcc20 from './native/kcc20Tx.js';
 export * as curveCp from './native/curveCpTx.js';
 export * as poolCp from './native/poolCpTx.js';

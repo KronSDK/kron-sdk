@@ -60,6 +60,11 @@ npm install @kronsdk/kron-sdk
   call goes to the backend (compile) vs. the SDK (assemble), and the per-trade sequence. Also covers
   **partner attribution** (tagging trades so integrator volume is credited). **Start here for trading.**
 - **[docs/INTEGRATION.md](docs/INTEGRATION.md)** — the full integration surface: endpoints, clients, data shapes.
+- **[docs/INTEGRATING-KCC20-UTXOS.md](docs/INTEGRATING-KCC20-UTXOS.md)** — **read before writing your own UTXO
+  selection.** A KCC-20 UTXO's native KAS value is not part of its identity and is not predictable: no covenant
+  pins it (VM-proven), and another implementation may simply use a different default — this SDK did, before
+  0.13.3. Select by lineage, read the value off the entry you spend, size funding with `carrierShortfall`.
+  Getting this wrong silently produces transactions consensus rejects. Helpers: `covenantSelect.*`.
 - **[docs/WALLETS.md](docs/WALLETS.md)** — the wallet provider + discovery contract (KIP-12) and how to adapt it.
 
 ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for why.

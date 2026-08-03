@@ -3,6 +3,28 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+### Added — `covenantSelect` (covenant UTXO selection contract)
+New namespace `covenantSelect` exporting `selectCovenantTokenUtxo`, `selectCovenantTokenOutpoint`,
+`selectCovenantUtxo`, `selectCovenantOutpoint`, `carrierShortfall`, `carrierOf`, `normalizedCovenantId`
+and `COVENANT_DUST`.
+
+**Why it matters for integrators.** A KCC-20 UTXO's native KAS value is not part of its identity and is not
+predictable. `kcc20.sil` conserves token amounts and constrains no output value; the curve/pool covenants pin
+only their own KAS continuation and fee legs, so on buy/sell/graduate/swap the covenant-owned token output's
+value is whatever the transaction builder chose — VM-proven in the KRON repo's
+`poc-token-output-value-unpinned.mjs`. Selecting a balance by `value === COVENANT_DUST`, or assuming that
+figure for an input, therefore fails against a UTXO shaped by anyone else. That needs no attacker: **this SDK
+itself defaulted an unset `tokenDust` to `1000n` before KRN-SDK-DUST in 0.13.3**, so divergent carrier values
+have already occurred once in this ecosystem.
+
+Select by lineage, take the value off the entry you spend, emit at `COVENANT_DUST`, and add
+`carrierShortfall(inputValue)` to your funding selection. Full rationale and a checklist:
+[docs/INTEGRATING-KCC20-UTXOS.md](docs/INTEGRATING-KCC20-UTXOS.md).
+
+Additive only — no existing export changed behaviour.
+
 ## 0.14.3
 
 ### Docs — README overhaul (no code change)
