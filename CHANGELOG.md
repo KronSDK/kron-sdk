@@ -3,7 +3,7 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
-## Unreleased
+## 0.15.0
 
 ### Added — `covenantSelect` (covenant UTXO selection contract)
 New namespace `covenantSelect` exporting `selectCovenantTokenUtxo`, `selectCovenantTokenOutpoint`,
