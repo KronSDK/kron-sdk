@@ -144,7 +144,7 @@ picker — a handy smoke test.)
   `signPskt`.
 
 **Compatibility contract.** The two event names never change; the payload shape follows
-[KIP-12](https://github.com/kaspanet/kips/pull/21) — the KIP is where any new field comes from.
+[KIP-12](https://github.com/kaspanet/kips/pull/44) — the KIP is where any new field comes from.
 dApp-side handling stays lenient: an announce missing the newer info fields (`id`, `methods`) is still
 surfaced, so wallets built against earlier snippets keep working at runtime — bring the fields along
 when you next touch your announce code. Wallets that never adopt the announce events lose nothing: dApp-side
@@ -153,7 +153,7 @@ hardcoded detection (e.g. KRON's built-in `window.kasware` sniffing) stays; wall
 
 ## Ecosystem context
 
-The discovery + provider contract above **is [KIP-12](https://github.com/kaspanet/kips/pull/21)** — the
+The discovery + provider contract above **is [KIP-12](https://github.com/kaspanet/kips/pull/44)** — the
 Kaspa wallet provider and discovery standard (draft, under active revival with the original authors).
 The KIP is the authoritative specification; this SDK implements it directly, so integrating against
 this document is integrating against the standard. Message signing is separately covered by the

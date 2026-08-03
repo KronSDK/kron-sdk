@@ -4,53 +4,36 @@
 — a bonding-curve launchpad + AMM DEX — from any JS/TS environment.** Browser or Node. No custody, ever:
 this package only *builds* transactions; a wallet (yours, or your user's) signs them.
 
-> ⚠️ **Upgrade to 0.11.0 for mainnet.** Two separate reasons, both of which produce rejected transactions:
-> versions **through 0.9.1** omit the dev-fund fee output every mainnet token requires (covenant rejection),
-> and versions **through 0.10.0** under-pay the network fee and over-declare compute budget, so the node's
-> mempool refuses them (`under the required amount … for normalized transient mass`). Both scale with
-> transaction size, so they fail on real trades rather than small tests. See the [CHANGELOG](CHANGELOG.md).
->
-> **Status: v0.14.1, mainnet.** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.14.3, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
-> generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract and how to
-> adapt it to a specific wallet's injected provider. **0.7.0** added cross-wallet **provider discovery**
-> (announce/request events) so any Kaspa wallet can surface itself to any dApp with no per-wallet code;
-> **0.7.1** hardened the trade builders to fail fast on a few footgun inputs; **0.8.0** cut the discovery
-> surface over to [KIP-12](https://github.com/kaspanet/kips/pull/21) canonical wire values and announce
-> fields (breaking if you compared against the old literals — see the [CHANGELOG](CHANGELOG.md));
-> **0.9.0** added per-token wallet trade history (`IndexerClient.tokenAddressTrades`) plus pagination on
-> `addressTrades`; **0.9.1** fixes `buildBindLp` to match KRON's current on-chain pool covenant (the old
-> shape is now rejected on-chain) and corrects a voluntary-LP fee-quoting rounding issue in
-> `quotePoolCpBuy`/`quotePoolCpSell` for pools under ~5% voluntary liquidity; **0.10.0** adds the mainnet
-> dev-fund trade-fee leg to the curve builders and quotes; **0.11.0** fixes network-fee estimation (transient
-> mass) and right-sizes the per-input compute budgets; **0.12.0** adds token-list platform-signature
-> verification (`verify.verifyTokenListSignature`) and makes the release parity gate fail closed;
-> **0.13.0** moves partner attribution on-chain (pass `ref` to `assembleNativeTx`) so integrator trades
-> are credited regardless of submission route; **0.13.1** fixes AMM **pool swaps**, which the node rejected
-> with `script ran, but verification failed` because the voluntary-LP retention in `quotePoolCpBuy` /
-> `quotePoolCpSell` floored where the covenant takes a ceiling — token-heavy pools failed almost always and
-> balanced pools intermittently; **0.13.2** fixes AMM **liquidity removal**, which `buildRemoveLiquidity`
-> always built in a pre-restructure shape every live pool rejects — upgrade if you trade graduated tokens
-> or manage LP positions; **0.13.3** fixes `buildAddLiquidity`/`buildRemoveLiquidity`/`buildBindLp`/
-> `buildPoolV3SwapKasForToken`/`buildPoolV3SwapTokenForKas` defaulting unset `tokenDust` to sub-dust 1000
-> sompi instead of the mass-safe `COVENANT_DUST` floor; **0.13.4** fixes the identical sub-dust default on
-> the curve builders (`buildCpBuy`/`buildCpSell`/`buildCpGraduate`), which 0.13.3 missed — **upgrade if you
-> call any of these without an explicit `tokenDust`**; **0.14.0** adds the counterfeit-LP defence — pools that
-> graduated before the covenant guard (`ansem`/`kron` + tokens still on the curve) can be counterfeit-bound so
-> added liquidity is drained, so **gate `poolCp.buildAddLiquidity` on `IndexerClient.assertLpBindSafe(tick)`** —
-> see the [CHANGELOG](CHANGELOG.md); **0.14.1** stops `curve.quoteCpSell` / `poolCp.quotePoolCpSell` returning a
-> **negative `net`** on small sells — every fee output is padded to a 0.2 KAS floor, so below ~0.61 KAS of
-> proceeds (curve) or ~0.41 KAS (pool) the fixed fee exceeded the payout and the seller paid to sell. Both now
-> return `null`, the same "not sellable" contract they already used, so **if you render `.net` you are fixed by
-> upgrading with no code change** — see the [CHANGELOG](CHANGELOG.md).
+> generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract (which is
+> [KIP-12](https://github.com/kaspanet/kips/pull/44)) and how to adapt it to a specific wallet's injected
+> provider.
 >
-> **⚠️ On an old pinned version? `npm install @kronsdk/kron-sdk@latest`.** Releases before 0.6.0 built
-> **version-0** transactions, which cannot carry the covenant bindings Kaspa's covenant layer (KIP-20)
-> requires on output — every assembled spend was rejected on-chain with `script ran, but verification
-> failed`. That was fixed across 0.5.0–0.6.0 (all builders now attach the required `CovOutput.binding`
-> automatically), so any current release is safe and **`@latest` is all you need** — don't pin below 0.6.0.
-> The per-version [CHANGELOG](CHANGELOG.md) migration notes only matter if you'd been assembling
-> transactions by hand instead of via `spend.assembleNativeTx`.
+> ⚠️ **Install `@latest` — do not pin an older release.** Every release before 0.14.1 has at least one bug
+> that either gets transactions **rejected on-chain** or produces a **wrong quote**. The floors, newest
+> first (full detail per version in the [CHANGELOG](CHANGELOG.md)):
+>
+> - **≤ 0.14.0** — small-sell quotes could return a **negative `net`** (the seller pays to sell); since
+>   0.14.1 `quoteCpSell`/`quotePoolCpSell` return `null` there instead — treat it as "amount too small
+>   to sell", not an error.
+> - **≤ 0.13.3** — curve builders (`buildCpBuy`/`buildCpSell`/`buildCpGraduate`) defaulted an unset
+>   `tokenDust` to a sub-dust value that blows the mass cap (0.13.3 fixed only the pool builders).
+> - **≤ 0.13.1** — `buildRemoveLiquidity` built a shape every live pool rejects.
+> - **≤ 0.13.0** — pool swaps rejected with `script ran, but verification failed` (fee rounding floored
+>   where the covenant takes a ceiling).
+> - **≤ 0.10.0** — network fee under-paid / compute over-declared → mempool rejection; **≤ 0.9.1** also
+>   omits the dev-fund fee output every mainnet curve token requires → covenant rejection.
+> - **< 0.6.0** — built version-0 transactions with no covenant bindings; nothing that old can produce a
+>   valid spend at all.
+>
+> **Two gates every integrator must implement** (both enforced by current code, but you have to call them):
+>
+> - Gate `poolCp.buildAddLiquidity` on **`IndexerClient.assertLpBindSafe(tick)`**. Pools that graduated
+>   before the counterfeit-LP covenant guard can be counterfeit-bound so that added liquidity is drained;
+>   the check throws unless the pool's LP shares are provably honest. Removing liquidity needs no gate.
+> - Fetch the live curve UTXO via **`SequencerClient.curveHead(curveCovid)`**, not by deriving the curve's
+>   address from indexer state — see the Quickstart below and `docs/INTEGRATION.md` §4 "Curve state".
 
 ## Why this exists
 
@@ -85,7 +68,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.14.1      # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.14.3      # or pin an exact version for reproducible builds
 ```
 
 The package follows semver — **just install `@latest`**; there's no reason to pin an older release. Anything
@@ -129,7 +112,7 @@ console.log(`100 KAS -> ${quote.tokenOut} tokens, fee ${quote.fee} sompi`);
 const sell = kron.curve.quoteCpSell(cpState, 5_000n);
 if (!sell) console.log('too small to sell — the fixed fee outputs cost more than this returns');
 
-// 3. Build the covenant spend against the LIVE curve. `cpTemplate`/`tokenTemplate` need the target's
+// 4. Build the covenant spend against the LIVE curve. `cpTemplate`/`tokenTemplate` need the target's
 //    already-compiled script bytes + state offset — read them from your indexer's UTXO data
 //    (redeemScriptHex etc.), this package doesn't compile them.
 //

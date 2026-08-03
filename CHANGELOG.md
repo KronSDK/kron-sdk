@@ -3,6 +3,35 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.14.3
+
+### Docs — README overhaul (no code change)
+
+- Removed the stale "Upgrade to 0.11.0 for mainnet" callout — 0.11.0 was **not** sufficient (pool swaps
+  were chain-rejected through 0.13.0, LP removal through 0.13.1). Guidance is now simply: install
+  `@latest`, with a compact list of version floors and why each matters.
+- Replaced the run-on per-version narrative in the header with a "two gates every integrator must
+  implement" summary (`assertLpBindSafe` before add-liquidity; `sequencer.curveHead()` for the live
+  curve UTXO). Full history remains here in the CHANGELOG.
+- KIP-12 links now point to the active proposal (kaspanet/kips#44) instead of the superseded draft
+  (#21), in README and `docs/WALLETS.md`.
+
+## 0.14.2
+
+### Docs — how to fetch the live curve UTXO before building a buy/sell
+
+No code change. Clarifies a gap that was causing intermittent `no curve UTXO found (state moved?)`
+failures for integrators building curve trades directly against the indexer: the curve covenant's
+on-chain address is state-dependent (`tokenReserve` is spliced into its redeem script), so it moves
+to a new address every trade. Deriving that address yourself from `indexer.token(tick).cpState` and
+searching for its UTXO races the indexer's poll lag and fails on busy curves.
+
+- README quickstart now says explicitly: use `sequencer.curveHead(curveCovid)` to get the live
+  spendable outpoint, not a self-derived address lookup.
+- `docs/INTEGRATION.md` gained a "Curve state (pre-graduation trades)" section (§4) and an updated
+  "TG bot — buy on the curve" recipe (§8) pointing at the sequencer, with the indexer-only fallback
+  retry cadence (5 attempts, 1.5s apart) if the sequencer is unreachable.
+
 ## 0.14.1
 
 ### Fixed — `quoteCpSell` / `quotePoolCpSell` could return a NEGATIVE `net` (the seller pays to sell)
