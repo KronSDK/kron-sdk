@@ -10,10 +10,16 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > [KIP-12](https://github.com/kaspanet/kips/pull/44)) and how to adapt it to a specific wallet's injected
 > provider.
 >
-> ⚠️ **Install `@latest` — do not pin an older release.** Every release before 0.14.1 has at least one bug
+> ⚠️ **Install `@latest` — do not pin an older release.** Every release before 0.16.0 has at least one bug
 > that either gets transactions **rejected on-chain** or produces a **wrong quote**. The floors, newest
 > first (full detail per version in the [CHANGELOG](CHANGELOG.md)):
 >
+> - **≤ 0.15.0** — builders emitted a bare `COVENANT_DUST` on covenant-owned CONTINUATION outputs (curve
+>   inventory, pool token reserve, pool L inventory). Tokens launched on the **value-continuation covenant**
+>   enforce `out.value >= in.value` there, so against a reserve someone has PADDED above the dust that
+>   transaction is **rejected on-chain** — and because that output is the token's only reserve, a rejection
+>   wedges the token. 0.16.0 emits `covenantSelect.continuationValue(dust, inputValue)`. Older tokens are
+>   unaffected, but you cannot tell them apart at build time, so just upgrade.
 > - **≤ 0.14.0** — small-sell quotes could return a **negative `net`** (the seller pays to sell); since
 >   0.14.1 `quoteCpSell`/`quotePoolCpSell` return `null` there instead — treat it as "amount too small
 >   to sell", not an error.
@@ -27,13 +33,18 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > - **< 0.6.0** — built version-0 transactions with no covenant bindings; nothing that old can produce a
 >   valid spend at all.
 >
-> **Two gates every integrator must implement** (both enforced by current code, but you have to call them):
+> **Three rules every integrator must follow** (the code gives you the helpers; you have to call them):
 >
 > - Gate `poolCp.buildAddLiquidity` on **`IndexerClient.assertLpBindSafe(tick)`**. Pools that graduated
 >   before the counterfeit-LP covenant guard can be counterfeit-bound so that added liquidity is drained;
 >   the check throws unless the pool's LP shares are provably honest. Removing liquidity needs no gate.
 > - Fetch the live curve UTXO via **`SequencerClient.curveHead(curveCovid)`**, not by deriving the curve's
 >   address from indexer state — see the Quickstart below and `docs/INTEGRATION.md` §4 "Curve state".
+> - **Never assume a KCC-20 UTXO's native KAS value.** Select it with **`covenantSelect.selectCovenantTokenUtxo`**
+>   (lineage, never value), take the real value off the entry you spend, emit covenant-owned continuations at
+>   **`covenantSelect.continuationValue(dust, inputValue)`**, and add **`covenantSelect.carrierShortfall`** to
+>   your funding. Getting this wrong produces transactions consensus rejects, with no attacker involved —
+>   see [docs/INTEGRATING-KCC20-UTXOS.md](docs/INTEGRATING-KCC20-UTXOS.md).
 
 ## Why this exists
 
@@ -61,10 +72,13 @@ npm install @kronsdk/kron-sdk
   **partner attribution** (tagging trades so integrator volume is credited). **Start here for trading.**
 - **[docs/INTEGRATION.md](docs/INTEGRATION.md)** — the full integration surface: endpoints, clients, data shapes.
 - **[docs/INTEGRATING-KCC20-UTXOS.md](docs/INTEGRATING-KCC20-UTXOS.md)** — **read before writing your own UTXO
-  selection.** A KCC-20 UTXO's native KAS value is not part of its identity and is not predictable: no covenant
-  pins it (VM-proven), and another implementation may simply use a different default — this SDK did, before
-  0.13.3. Select by lineage, read the value off the entry you spend, size funding with `carrierShortfall`.
-  Getting this wrong silently produces transactions consensus rejects. Helpers: `covenantSelect.*`.
+  selection.** A KCC-20 UTXO's native KAS value is not part of its identity and is not predictable in either
+  direction: on older covenants nothing pins it at all, and on the value-continuation covenant shaving is
+  blocked but PADDING is still legal (the check is relative on purpose). Another implementation may also just
+  use a different default — this SDK did, before 0.13.3. Select by lineage, read the value off the entry you
+  spend, emit continuations at `continuationValue`, size funding with `carrierShortfall`. All VM-proven against
+  both covenant generations. Getting this wrong silently produces transactions consensus rejects.
+  Helpers: `covenantSelect.*`.
 - **[docs/WALLETS.md](docs/WALLETS.md)** — the wallet provider + discovery contract (KIP-12) and how to adapt it.
 
 ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for why.

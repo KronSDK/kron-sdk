@@ -57,6 +57,13 @@ is what guarantees you compile the exact same script (byte-for-byte) that KRON's
    - post-graduation swap → the pool reserves + the pool UTXO (+ its token-side UTXO)
    - transfer → just the token UTXO you're spending (`redeemScriptHex` is already on the
      `GET /v1/kcc20/token/{tick}/address/{address}/utxos` response)
+
+   **Take each token UTXO's native KAS value from the entry you just read — never from a constant.** It is
+   not part of the UTXO's identity and is not predictable: older covenants pin it not at all, and the
+   value-continuation covenant blocks shaving but still permits padding. Select with
+   `covenantSelect.selectCovenantTokenUtxo` (lineage, never value). Assuming 0.5 KAS builds a transaction
+   that doesn't balance, and consensus rejects it — no attacker required, a second implementation using a
+   different default is enough. See [INTEGRATING-KCC20-UTXOS.md](INTEGRATING-KCC20-UTXOS.md).
 3. **Materialize** — splice the live state into the compiled script:
    - curve: `curveCp.cpAddress(k, curveTpl, state, network)` to derive the address, `curveCp.materializeCpScript(curveTpl, state)` for the bytes
    - pool: `poolCpV3.poolCpV3Address(...)` / `poolCpV3.materializePoolCpV3Script(...)`

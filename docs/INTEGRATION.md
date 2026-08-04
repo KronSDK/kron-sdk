@@ -351,7 +351,13 @@ A covenant spend only validates on-chain as a KIP-20 **version-1** transaction:
   input ≈ 500, a curve/pool input ≈ 2000. `assembleNativeTx` applies role-based defaults.
 - **Fees must cover the compute budget** (grams = budget × 100) on top of byte/storage mass — a flat
   legacy fee (e.g. 5000 sompi) is too low. Size with `kron.spend.estimateNativeFee`.
-- **Covenant outputs carry ≥ 0.5 KAS** (`kron.spend.COVENANT_DUST`) for KIP-9 storage mass.
+- **Covenant outputs carry ≥ 0.5 KAS** (`kron.spend.COVENANT_DUST`) for KIP-9 storage mass. That is an
+  EMIT-side convention — nothing requires an EXISTING token UTXO to hold it, so read each input's value from
+  chain rather than assuming. A covenant-owned CONTINUATION output (curve inventory, pool token reserve, pool
+  L inventory) must be emitted at `covenantSelect.continuationValue(COVENANT_DUST, inputValue)`: from the
+  value-continuation covenant onward the chain enforces `out.value >= in.value` there, so a bare constant
+  against a padded reserve is rejected. Add `covenantSelect.carrierShortfall(inputValue)` to your funding.
+  Full rationale: [INTEGRATING-KCC20-UTXOS.md](INTEGRATING-KCC20-UTXOS.md).
 
 `assembleNativeTx` handles all of this (SDK ≥ 0.5.0; earlier versions built v0 transactions without
 bindings, which the chain always rejects — upgrade).
