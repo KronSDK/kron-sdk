@@ -3,6 +3,32 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.16.0
+
+### Required — builders emit `continuationValue` on covenant-owned continuations
+KRON's covenants gained a **value-continuation** schema: `curve_cp` (buy / sell / graduate) and
+`amm_pool_cp_v3` (both swaps, add/removeLiquidity, plus the L inventory) now enforce
+`out.value >= in.value` on the covenant-owned token output. The check is RELATIVE, never an absolute dust
+constant — baking a constant into an immutable redeem would brick every already-launched token if the dust
+size ever changed. Shaving that output is now impossible; **padding it is still legal**.
+
+That second half is why this is a required SDK change rather than a nicety. Emitting a bare `COVENANT_DUST`
+against a PADDED reserve is rejected by consensus, and because that output is the token's only reserve, a
+rejection wedges the token permanently. All nine continuation sites now emit
+`continuationValue(dust, inputValue)` = max(dust, input). Apply it unconditionally — it is safe on older
+schemas too, which constrain no output value.
+
+`batchBuy`-style outputs are deliberately NOT converted: `curve_cp.sil` pins those `== ORDER_TOKEN_DUST`.
+
+New export `covenantSelect.continuationValue`. Docs updated:
+[docs/INTEGRATING-KCC20-UTXOS.md](docs/INTEGRATING-KCC20-UTXOS.md).
+
+**New test file `src/native/covenantSelect.test.ts` (17 tests), and it covers a gap `verify:parity` cannot.**
+Parity compares these builders byte-for-byte against the kron reference, but its fixtures only feed a
+covenant-owned input holding exactly `COVENANT_DUST` — where `continuationValue(dust, input) === dust`. A
+builder that regressed to the bare constant would stay byte-identical and parity would still pass. These tests
+drive the unequal cases; reverting one emit site was verified to fail them (exit 1).
+
 ## 0.15.0
 
 ### Added — `covenantSelect` (covenant UTXO selection contract)

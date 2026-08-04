@@ -17,6 +17,7 @@
 // Reuses the kcc20 template/helpers (token A AND the LP-share token L share the SAME kcc20 contract — only
 // the covid differs). No top-level SDK import — caller passes the loaded WASM `k`.
 import type { Kaspa } from '../wasm/kaspa.types.js';
+import { continuationValue } from './covenantSelect.js';
 import { SigScriptBuilder, int8LE } from './sigscript.js';
 import {
   type Kcc20State,
@@ -361,8 +362,8 @@ export function buildAddLiquidity(
   ];
   const outputs: CovOutput[] = [
     { value: q.newKas * SCALE, scriptPublicKey: poolCpSpk(k, newRedeem), role: 'pool', binding: { covid: poolCovidHex, authorizingInput: 0 } },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 2 } },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolLpOut)), role: 'poolLpInventory', binding: { covid: lpCovidHex, authorizingInput: 3 } },
+    { value: continuationValue(dust, utxo.tokenUtxo.value), scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 2 } },
+    { value: continuationValue(dust, lpInventory.value), scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolLpOut)), role: 'poolLpInventory', binding: { covid: lpCovidHex, authorizingInput: 3 } },
     { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, lpSharesOut)), role: 'lpShares', binding: { covid: lpCovidHex, authorizingInput: 3 } },
   ];
   return { kind: 'addLiquidity', inputs, outputs, economics: { dKas: q.dKas, dToken: q.dToken, dShares: q.dShares, newShares: q.newShares }, covids: { poolCovid: poolCovidHex, tokenCovid: tokenCovidHex } };
@@ -440,9 +441,9 @@ export function buildRemoveLiquidity(
   ];
   const outputs: CovOutput[] = [
     { value: q.newKas * SCALE, scriptPublicKey: poolCpSpk(k, newRedeem), role: 'pool', binding: { covid: poolCovidHex, authorizingInput: 0 } },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
+    { value: continuationValue(dust, utxo.tokenUtxo.value), scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
     ...(q.dToken > 0n ? [{ value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, lpTokenOut)), role: 'lpToken' as const, binding: { covid: tokenCovidHex, authorizingInput: 1 } }] : []),
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolLpOut)), role: 'poolLpInventory', binding: { covid: lpCovidHex, authorizingInput: 2 } },
+    { value: canonical ? continuationValue(dust, lpInventory!.value) : dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolLpOut)), role: 'poolLpInventory', binding: { covid: lpCovidHex, authorizingInput: 2 } },
   ];
   return { kind: 'removeLiquidity', inputs, outputs, economics: { dShares: q.dShares, dKas: q.dKas, dToken: q.dToken, newShares: q.newShares }, covids: { poolCovid: poolCovidHex, tokenCovid: tokenCovidHex } };
 }

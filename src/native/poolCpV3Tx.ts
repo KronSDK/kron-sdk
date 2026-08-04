@@ -11,6 +11,7 @@
 // thus the P2SH address) differs, plus the swap tx in/out shapes. So this module REUSES the v2 state/quote/
 // address helpers and only re-implements the two swap builders + the sell sig (which gains traderChangeOut).
 import type { Kaspa } from '../wasm/kaspa.types.js';
+import { continuationValue } from './covenantSelect.js';
 import { SigScriptBuilder } from './sigscript.js';
 import {
   type Kcc20State, type Kcc20Template,
@@ -98,7 +99,7 @@ export function buildPoolV3SwapKasForToken(
   ];
   const outputs: CovOutput[] = [
     { value: q.newKas * SCALE, scriptPublicKey: poolCpV3Spk(k, newRedeem), role: 'pool', binding: { covid: poolCovidHex, authorizingInput: 0 } },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
+    { value: continuationValue(dust, utxo.tokenUtxo.value), scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
     { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, traderTokenOut)), role: 'trader', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
     { value: q.creatorOut, scriptPublicKey: p2pkSpk(k, params.creatorFeeOwner), role: 'creatorFee' },
     { value: q.platformOut, scriptPublicKey: p2pkSpk(k, params.platformFeeOwner), role: 'platformFee' },
@@ -142,7 +143,7 @@ export function buildPoolV3SwapTokenForKas(
   ];
   const outputs: CovOutput[] = [
     { value: q.newKas * SCALE, scriptPublicKey: poolCpV3Spk(k, newRedeem), role: 'pool', binding: { covid: poolCovidHex, authorizingInput: 0 } },
-    { value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
+    { value: continuationValue(dust, utxo.tokenUtxo.value), scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
     { value: q.creatorOut, scriptPublicKey: p2pkSpk(k, params.creatorFeeOwner), role: 'creatorFee' },
     { value: q.platformOut, scriptPublicKey: p2pkSpk(k, params.platformFeeOwner), role: 'platformFee' },
   ];

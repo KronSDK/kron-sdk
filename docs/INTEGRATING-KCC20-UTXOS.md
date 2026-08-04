@@ -24,9 +24,11 @@ const input = { transactionId: piece.transactionId, index: piece.index, value: 5
 
 ## Why nothing enforces it
 
-`kcc20.sil` enforces token-**amount** conservation (`inSum == outSum`) and says nothing whatsoever about output values. The curve and pool covenants pin only their own KAS continuation and their fee legs. On `buy`, `sell`, `graduate`, `swapKasForToken` and `swapTokenForKas`, the covenant-owned token output's native value is chosen freely by whoever builds the transaction.
+`kcc20.sil` enforces token-**amount** conservation (`inSum == outSum`) and says nothing whatsoever about output values — on every schema, current included. On the schemas most live tokens run, the curve and pool covenants pin only their own KAS continuation and their fee legs, so on `buy`, `sell`, `graduate`, `swapKasForToken` and `swapTokenForKas` the covenant-owned token output's native value is chosen freely by whoever builds the transaction.
 
-That is proven, not assumed. In the KRON repo, [`covenants/native/tools/poc-token-output-value-unpinned.mjs`](https://github.com/) drives the compiled covenants through the Silverscript VM and shows the chain **accepts** that output shaved to 10,000,000 sompi, shaved to 1 sompi, and over-funded by 1 sompi — while the same one-sompi perturbation applied to any output the covenant *does* pin is **rejected**, and `batchBuy` (which pins its token outputs) rejects it in both directions.
+From the **value-continuation schema** onward those covenants additionally enforce `out.value >= in.value` on that output. That stops shaving — but it deliberately still permits **padding**, because the check is relative rather than an absolute dust constant (baking a constant into an immutable redeem would brick every already-launched token if the dust size ever changed). So the value is still not something you may assume in either direction.
+
+That is proven, not assumed. In the KRON repo, `covenants/native/tools/poc-token-output-value-continuation.mjs` drives the compiled covenants through the Silverscript VM against the archived pre-fix sources and the current ones side by side: pre-fix the chain **accepts** that output shaved to 10,000,000 sompi, shaved to 1 sompi, and over-funded by 1 sompi; on current sources every shave is **rejected** at its own continuation check while over-funding is still accepted. The same one-sompi perturbation on any output the covenant *does* pin is rejected on both, and `batchBuy` — which pins its token outputs absolutely — rejects it in both directions.
 
 So a UTXO you did not create may carry any value at all:
 
@@ -56,7 +58,7 @@ const extra = covenantSelect.carrierShortfall(inputValue);  // 0 when already >=
 Then:
 
 1. **Feed `inputValue` to the builder** as the input's value. Do not substitute the constant.
-2. **Emit at `COVENANT_DUST`.** Re-emitting at 0.5 KAS is what restores the invariant and keeps storage mass reasonable for everyone who touches that UTXO after you.
+2. **Emit at `continuationValue(COVENANT_DUST, inputValue)` for a covenant-owned continuation** — the curve inventory, pool token reserve or pool L inventory. From the value-continuation schema onward the covenants enforce `out.value >= in.value` there, so a bare constant against a padded reserve is rejected by consensus, and because that output is the token's only reserve the rejection wedges the token permanently. Every other output emits plain `COVENANT_DUST`. Applying `continuationValue` unconditionally is safe on older schemas too — they constrain no output value, and carrying the larger value forward is what an honest spender does anyway. Do not branch on schema.
 3. **Add `extra` to your funding selection.** If you emit 0.5 KAS against an input carrying 0.1, you are funding 0.4 KAS out of pocket — bounded, paid once, and it heals the UTXO permanently. If you do not ask for it, your change output goes negative and the transaction is rejected.
 
 An over-funded input needs no adjustment: `carrierShortfall` returns 0 and the surplus lands in your change.
@@ -77,5 +79,6 @@ For those, pass an explicit `expectedAmount` to `selectCovenantUtxo`. For **ever
 - [ ] No selector compares a KCC-20 UTXO's value to a constant.
 - [ ] Every token input's value is read from the chain entry being spent.
 - [ ] Funding selection includes `carrierShortfall` for those inputs.
-- [ ] Outputs are emitted at `COVENANT_DUST`.
+- [ ] Covenant-owned continuation outputs are emitted at `continuationValue(COVENANT_DUST, inputValue)`;
+      every other output at plain `COVENANT_DUST`.
 - [ ] Selection fails closed on no match **and** on more than one match.

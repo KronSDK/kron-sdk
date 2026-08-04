@@ -9,12 +9,14 @@
 // about to spend.
 //
 // ─── WHY ──────────────────────────────────────────────────────────────────────────────────────────────────
-// `kcc20.sil` enforces token-AMOUNT conservation and says nothing whatsoever about output values. The curve
-// and pool covenants pin only their OWN KAS continuation and their fee legs. On buy / sell / graduate /
-// swapKasForToken / swapTokenForKas the covenant-owned token output's value is therefore chosen freely by
-// whoever builds the transaction — proven against the compiled covenant in the Silverscript VM (KRON repo:
-// `covenants/native/tools/poc-token-output-value-unpinned.mjs`; the same perturbation on any PINNED output is
-// rejected, and `batchBuy`, which does pin its token outputs, rejects it too).
+// `kcc20.sil` enforces token-AMOUNT conservation and says nothing whatsoever about output values — on EVERY
+// schema, including current. On the schemas most live tokens run, the curve and pool covenants pin only their
+// OWN KAS continuation and their fee legs, so the covenant-owned token output's value is chosen freely by
+// whoever builds the transaction. From the value-continuation schema onward they additionally enforce
+// `out.value >= in.value` on that output — which stops SHAVING but deliberately still permits PADDING, so the
+// value is still not a constant you may assume. Both directions are proven against the compiled covenants in
+// the Silverscript VM (KRON repo: `covenants/native/tools/poc-token-output-value-continuation.mjs`, which runs
+// the archived pre-fix sources and the current ones side by side).
 //
 // So a UTXO you did not create may legitimately carry any value at all:
 //   • a stranger can shave it (bounded near 0.45 KAS by KIP-9 storage mass) or pad it (1 sompi, no bound);
@@ -39,9 +41,11 @@
 //   // and size funding for the top-up you are about to emit:
 //   const extra = carrierShortfall(inputValue);            // 0 when the piece is already >= COVENANT_DUST
 //
-// EMIT at COVENANT_DUST (that is what restores the invariant and keeps storage mass sane for everyone after
-// you), but READ whatever is actually there. The difference is funded by whoever spends next — bounded, paid
-// once, and it heals the UTXO permanently.
+// READ whatever is actually there. For a COVENANT-OWNED continuation output (curve inventory, pool token
+// reserve, pool L inventory) emit `continuationValue(COVENANT_DUST, inputValue)` — NOT a bare constant, or the
+// value-continuation covenants reject your transaction against a padded reserve and wedge the token. For every
+// other output emit COVENANT_DUST; that is what restores the invariant and keeps storage mass sane for
+// everyone after you, and the difference is funded by whoever spends next — bounded, paid once, permanent.
 import { COVENANT_DUST } from './spend.js';
 
 export { COVENANT_DUST };
@@ -56,6 +60,20 @@ export const carrierShortfall = (...inputValues: bigint[]): bigint =>
  *  exists only so an unverified piece degrades to the emit-side constant instead of throwing. Prefer passing
  *  pieces whose value you actually read. */
 export const carrierOf = (u: { value?: bigint }): bigint => u.value ?? COVENANT_DUST;
+
+/** The native value a covenant-owned CONTINUATION output must carry: at least the dust we normally emit, and
+ *  never less than the input it continues.
+ *
+ *  REQUIRED from the value-continuation schema onward. Those covenants enforce `out.value >= in.value` on the
+ *  curve inventory / pool token reserve / pool L inventory, so emitting a bare `COVENANT_DUST` against an
+ *  OVER-funded input is REJECTED by consensus — and because that output is the token's only reserve, the
+ *  rejection wedges the token permanently. Padding an input above the dust is legal, self-funded and harmless;
+ *  this function is what keeps it harmless.
+ *
+ *  Safe on pre-continuation tokens too: those covenants constrain no output value, and carrying the larger
+ *  value forward is what an honest spender would do anyway. So apply it unconditionally — do NOT branch on
+ *  schema. */
+export const continuationValue = (dust: bigint, inputValue: bigint): bigint => (inputValue > dust ? inputValue : dust);
 
 /** Normalize a provider-supplied covenant id to lowercase 64-hex, or null if it isn't one. */
 export const normalizedCovenantId = (value: unknown): string | null => {

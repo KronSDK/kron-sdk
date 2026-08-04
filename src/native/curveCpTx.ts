@@ -17,6 +17,7 @@
 // data (e.g. the `redeemScriptHex` field), not compiled locally; this package doesn't ship a covenant
 // compiler (see README).
 import type { Kaspa } from '../wasm/kaspa.types.js';
+import { continuationValue } from './covenantSelect.js';
 import { SigScriptBuilder, int8LE } from './sigscript.js';
 import { COVENANT_DUST } from './spend.js';
 import {
@@ -182,7 +183,7 @@ export function buildCpBuy(
   ];
   const outputs: CovOutput[] = [
     { value: newKas, scriptPublicKey: cpSpk(k, newCurveRedeem), role: 'curve', binding: { covid: curveCovidHex, authorizingInput: 0 } },
-    { value: dust, scriptPublicKey: kcc20Spk(k, invOutRedeem), role: 'inventory', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
+    { value: continuationValue(dust, inventory.value), scriptPublicKey: kcc20Spk(k, invOutRedeem), role: 'inventory', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
     { value: dust, scriptPublicKey: kcc20Spk(k, buyerRedeem), role: 'recipient', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
     { value: padFee(creatorFee), scriptPublicKey: p2pkSpk(k, tpl.params.creatorFeeOwner), role: 'creatorFee' },
     { value: padFee(platformFee), scriptPublicKey: p2pkSpk(k, tpl.params.platformFeeOwner), role: 'platformFee' },
@@ -249,7 +250,7 @@ export function buildCpSell(
   ];
   const outputs: CovOutput[] = [
     { value: utxo.realKas - kasOut, scriptPublicKey: cpSpk(k, newCurveRedeem), role: 'curve', binding: { covid: curveCovidHex, authorizingInput: 0 } },
-    { value: dust, scriptPublicKey: kcc20Spk(k, invOutRedeem), role: 'inventory', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
+    { value: continuationValue(dust, inventory.value), scriptPublicKey: kcc20Spk(k, invOutRedeem), role: 'inventory', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
     { value: padFee(creatorFee), scriptPublicKey: p2pkSpk(k, tpl.params.creatorFeeOwner), role: 'creatorFee' },
     { value: padFee(platformFee), scriptPublicKey: p2pkSpk(k, tpl.params.platformFeeOwner), role: 'platformFee' },
   ];
@@ -315,7 +316,7 @@ export function buildCpGraduate(
   const outputs: CovOutput[] = [
     { value: lockedValue, scriptPublicKey: cpSpk(k, lockedRedeem), role: 'curve', binding: { covid: curveCovidHex, authorizingInput: 0 } },
     { value: poolKas, scriptPublicKey: poolSpkV, role: 'pool', binding: { covid: poolCovidHex, authorizingInput: 0 } },
-    { value: dust, scriptPublicKey: kcc20Spk(k, poolTokenRedeem), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
+    { value: continuationValue(dust, inventory.value), scriptPublicKey: kcc20Spk(k, poolTokenRedeem), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
     { value: padFee(gradFee), scriptPublicKey: p2pkSpk(k, tpl.params.platformFeeOwner), role: 'gradFee' },
   ];
   return { kind: 'graduate', inputs, outputs, economics: { poolKas, gradFee, leftover, poolLockedShares }, covids: { tokenCovid: hexOf(A), poolCovid: poolCovidHex } };
