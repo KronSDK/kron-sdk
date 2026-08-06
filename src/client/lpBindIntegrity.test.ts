@@ -49,7 +49,17 @@ describe('buildAddLiquidity tripwire', () => {
   it('throws when the passed flag is null (unverified)', () => {
     expect(() => call({ lpBindVerified: null })).toThrow(/LP-bind integrity is UNVERIFIED/);
   });
-  it('does NOT trip when the flag is omitted (back-compat) — fails later on the real args instead', () => {
-    expect(() => call({})).not.toThrow(/LP-bind integrity/);
+  // FAIL CLOSED (0.17.0). Omitting the flag used to skip the gate entirely, so an integrator who never read
+  // the docs built an unguarded addLiquidity. A gate whose failure mode is a drained deposit must not default
+  // to silence.
+  it('throws when the flag is omitted — the gate is not opt-in', () => {
+    expect(() => call({})).toThrow(/LP-bind integrity is UNVERIFIED/);
+  });
+  it('throws when opts itself is omitted', () => {
+    expect(() => (buildAddLiquidity as (...a: any[]) => unknown)(...Array(10).fill(undefined)))
+      .toThrow(/LP-bind integrity is UNVERIFIED/);
+  });
+  it('builds past the gate only on an explicit true (then fails on the real args, not the gate)', () => {
+    expect(() => call({ lpBindVerified: true })).not.toThrow(/LP-bind integrity/);
   });
 });

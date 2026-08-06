@@ -35,9 +35,11 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 >
 > **Three rules every integrator must follow** (the code gives you the helpers; you have to call them):
 >
-> - Gate `poolCp.buildAddLiquidity` on **`IndexerClient.assertLpBindSafe(tick)`**. Pools that graduated
->   before the counterfeit-LP covenant guard can be counterfeit-bound so that added liquidity is drained;
->   the check throws unless the pool's LP shares are provably honest. Removing liquidity needs no gate.
+> - Gate `poolCp.buildAddLiquidity` on **`IndexerClient.assertLpBindSafe(tick)`**, then pass the fetched
+>   verdict as `opts.lpBindVerified`. Since **0.17.0 that option is required and fails closed** — omitting it
+>   throws rather than building an unguarded transaction. Pools that graduated before the counterfeit-LP
+>   covenant guard can be counterfeit-bound so that added liquidity is drained. Removing liquidity is never
+>   gated: an LP can always exit.
 > - Fetch the live curve UTXO via **`SequencerClient.curveHead(curveCovid)`**, not by deriving the curve's
 >   address from indexer state — see the Quickstart below and `docs/INTEGRATION.md` §4 "Curve state".
 > - **Never assume a KCC-20 UTXO's native KAS value.** Select it with **`covenantSelect.selectCovenantTokenUtxo`**

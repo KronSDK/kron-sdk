@@ -3,6 +3,35 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.17.0
+
+### Breaking — `buildAddLiquidity` now fails closed on the counterfeit-LP gate
+`opts.lpBindVerified` is **required**. Previously the tripwire read `'lpBindVerified' in opts`, so omitting
+the key skipped the check entirely and built an unguarded transaction. The README and `INTEGRATION.md` both
+described the pre-check as mandatory; the code did not enforce it, so any integrator who had not read the
+docs got no protection at all.
+
+Only three pool schemas carry `require(OpCovInputCount(boundLp) == 0)`, the on-chain guard that makes a
+counterfeit `bindLp` impossible. Ten do not, and template pinning is permanent — on those pools an honest
+bind is an observed fact about one transaction, not a property the covenant enforces. A permissionless binder
+can pass off a pre-minted token as the pool's LP shares and keep the remainder as counterfeit shares that
+drain exactly the voluntary liquidity a depositor adds. A gate whose failure mode is a drained deposit must
+not default to silence.
+
+**Migration** — fetch the verdict and hand it to the builder:
+
+```ts
+await indexer.assertLpBindSafe(tick);                 // throws on false/unverifiable
+const v = await indexer.lpBindVerified(tick);         // true | false | null
+kron.poolCp.buildAddLiquidity(/* … */, { lpBindVerified: v });
+```
+
+Passing `false` or `null` throws, as before. Omitting the option (or `opts` entirely) now throws
+`LP-bind integrity is UNVERIFIED` instead of building. If you established integrity by some other route,
+pass `true` deliberately.
+
+`buildRemoveLiquidity` is unchanged and remains ungated — an LP must always be able to exit.
+
 ## 0.16.0
 
 ### Required — builders emit `continuationValue` on covenant-owned continuations

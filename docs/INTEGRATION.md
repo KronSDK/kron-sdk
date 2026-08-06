@@ -315,7 +315,10 @@ covenant compiler or the `.sil` sources, and doesn't build the deploy/genesis tr
   post-graduation constant-product swap. For hot pools, route via the sequencer (§6) to avoid in-flight
   contention.
 - **`amm_pool_cp_v3` add/removeLiquidity** (`kron.poolCp.buildAddLiquidity` / `buildRemoveLiquidity`) —
-  voluntary LP deposit/withdraw (conservation shares, not mint/burn). **`buildRemoveLiquidity` requires
+  voluntary LP deposit/withdraw (conservation shares, not mint/burn). **`buildAddLiquidity` requires
+  `opts.lpBindVerified` since 0.17.0 and fails closed** — call `IndexerClient.assertLpBindSafe(tick)` and pass
+  the verdict; an absent or unverifiable value throws instead of building. `buildRemoveLiquidity` is never
+  gated. **`buildRemoveLiquidity` requires
   `opts.lpInventory` — the pool's L-inventory UTXO — whenever `poolTpl.canonicalInventoryRequired` is true,
   which every live pool sets (≥ 0.13.2; earlier releases always built a shape every current pool rejects).
   Fetch it the same way you already do for `buildAddLiquidity`.

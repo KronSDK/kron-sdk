@@ -320,16 +320,28 @@ export function buildAddLiquidity(
   utxo: PoolCpUtxo, lpInventory: PoolLpInventoryUtxo, poolCovid: Uint8Array,
   lpDepositToken: { transactionId: string; index: number; value: bigint; state: Kcc20State },
   lpPubkey: Uint8Array, q: AddLiquidityQuote, presenceWitnessIdx: number,
-  opts: { tokenDust?: bigint; lpBindVerified?: boolean | null } = {},
+  opts: { tokenDust?: bigint; lpBindVerified: boolean | null },
 ): CovenantSpend {
-  // COUNTERFEIT-LP TRIPWIRE. Pools on the pre-`e5469a7ad482` covenant can be counterfeit-bound so that added
-  // liquidity is drained by counterfeit shares (see IndexerClient.CpState.lpBindVerified / assertLpBindSafe).
-  // This builder is pure and cannot verify the L-share supply itself (that needs the indexer), so integrators
-  // MUST call `IndexerClient.assertLpBindSafe(tick)` first. If you pass the fetched flag here, it is enforced:
-  // only `true` is allowed to build — `false`/`null` throw. (Omitting it stays permitted for back-compat, but
-  // the pre-check is required; do not add liquidity to an unverified pool.)
-  if ('lpBindVerified' in opts && opts.lpBindVerified !== true) {
-    throw new Error(`Refusing to build addLiquidity: pool LP-bind integrity is ${opts.lpBindVerified === false ? 'FAILED (counterfeit shares could drain your deposit)' : 'UNVERIFIED'}. Gate on IndexerClient.assertLpBindSafe(tick) before building.`);
+  // COUNTERFEIT-LP TRIPWIRE — FAIL CLOSED.
+  //
+  // Only three pool schemas carry `require(OpCovInputCount(boundLp) == 0)`, the on-chain guard that makes a
+  // counterfeit bind impossible. Ten do not, and template pinning is permanent, so on those pools an honest
+  // `bindLp` is an observed fact about one transaction rather than a property the covenant enforces. A
+  // permissionless binder can pass off a pre-minted token as the pool's LP shares and keep the remainder as
+  // counterfeit shares that drain exactly the voluntary liquidity a depositor adds. VM-confirmed.
+  //
+  // This builder is pure and cannot check the L-share supply itself — that needs the indexer. So the caller
+  // must fetch the verdict and hand it over, and `lpBindVerified` is REQUIRED rather than optional.
+  //
+  // WHY REQUIRED (changed in 0.17.0). This previously read `'lpBindVerified' in opts`, so omitting the key
+  // skipped the check entirely and built an unguarded transaction. The docs called the pre-check mandatory;
+  // the code did not enforce it. An integrator who never read the docs got no protection at all. Silence is
+  // the wrong default for a gate whose failure mode is a drained deposit, so an absent or unverifiable
+  // verdict now throws. If you verified integrity by some other route, pass `true` deliberately.
+  //
+  // Removing liquidity is NEVER gated — an LP must always be able to exit. See `buildRemoveLiquidity`.
+  if (opts?.lpBindVerified !== true) {
+    throw new Error(`Refusing to build addLiquidity: pool LP-bind integrity is ${opts?.lpBindVerified === false ? 'FAILED (counterfeit shares could drain your deposit)' : 'UNVERIFIED'}. Await IndexerClient.assertLpBindSafe(tick), then pass the fetched verdict as opts.lpBindVerified.`);
   }
   if (lpDepositToken.state.amount !== q.dToken) throw new Error('LP deposit token UTXO must equal dToken exactly (split first)');
   const dust = opts.tokenDust ?? COVENANT_DUST;
