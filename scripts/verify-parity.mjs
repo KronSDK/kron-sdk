@@ -384,7 +384,11 @@ console.log(`\nparity: SDK dist vs kron reference builders (curve template ${cur
     const lpDeposit = { transactionId: '99'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), q.dToken) };
     // Explicit tokenDust on BOTH sides: this tests BUILDER STRUCTURE, independent of either side's default (the
     // SDK's default now deliberately diverges from the reference's — see the dust-default section below).
-    const args = [kaspa, poolTplCanonical, tokenTpl, utxo, lpInv, poolCovid, lpDeposit, lpPubkey, q, 4, { tokenDust: 50_000_000n }];
+    // `lpBindVerified: true` is the harness asserting the pool is honest, not a claim about any real pool. This
+    // section compares BUILDER STRUCTURE byte-for-byte; the counterfeit-LP gate itself is covered by
+    // src/client/lpBindIntegrity.test.ts. Since 0.17.0 the option is required and fails closed, so omitting it
+    // here would throw before either builder ran. The reference builder ignores the extra key.
+    const args = [kaspa, poolTplCanonical, tokenTpl, utxo, lpInv, poolCovid, lpDeposit, lpPubkey, q, 4, { tokenDust: 50_000_000n, lpBindVerified: true }];
     cmp('addLiquidity', MP.buildAddLiquidity(...args), SP.buildAddLiquidity(...args));
   }
 

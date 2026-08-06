@@ -169,7 +169,9 @@ async function main() {
   const lpDepositPub = randomBytes(32);
   const addQ = kron.poolCp.quoteAddLiquidity(addState, 10n);
   const lpDepositToken = { transactionId: '55'.repeat(32), index: 0, value: 1000n, state: kron.kcc20.addressPresenceOwned(lpDepositPub, addQ.dToken) };
-  const addSpend = kron.poolCp.buildAddLiquidity(k, poolTpl, tokenTpl, addUtxo, addLpInventory, addPoolCovid, lpDepositToken, lpDepositPub, addQ, 4);
+  // lpBindVerified is required since 0.17.0 (counterfeit-LP gate, fails closed). This offline harness asserts a
+  // synthetic honest pool; the gate's own behaviour is covered by src/client/lpBindIntegrity.test.ts.
+  const addSpend = kron.poolCp.buildAddLiquidity(k, poolTpl, tokenTpl, addUtxo, addLpInventory, addPoolCovid, lpDepositToken, lpDepositPub, addQ, 4, { lpBindVerified: true });
   const addTokenCovidHex = hexOf(addTokenCovid);
   const addLpCovidHex = hexOf(addLpCovid);
   assertBinding(addSpend.outputs[0], hexOf(addPoolCovid), 0, 'addLiquidity pool continuation');
