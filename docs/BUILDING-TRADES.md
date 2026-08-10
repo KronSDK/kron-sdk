@@ -150,7 +150,14 @@ Notes worth knowing:
   payload — validate with `kron.partnerTag.REF_RE` at your configuration boundary, because a dropped tag earns
   nothing and looks identical to untagged traffic.
 - Cost is ~2 mass units per byte: a 7-character tag is about **0.000028 KAS**, against a ~0.35 KAS network fee.
-- It changes nothing on-chain about the trade itself — no covenant inspects `payload`.
+- It changes nothing about the trade's on-chain *semantics* — no covenant inspects `payload`.
+- **No covenant reads `payload`, but consensus signs it.** `tx.payload` is committed to the signature hash,
+  so the tag must be set *before* signing and survive signing unchanged. This matters if you sign in the
+  browser: some wallet extensions compute their `signPskt` hash without covering `payload`, and the node
+  then rejects the tagged trade with **"script ran, but verification failed"** while the identical trade
+  untagged confirms. Check the payload is already present in the `txJsonString` you hand to `signPskt`
+  (applying the tag *after* the signature returns fails the same way), then raise it with the wallet vendor.
+  Reference behavior: `kron.spend.signPsktWithKey`. Raw-key server-side signers are unaffected.
 - The tag is unauthenticated: it's an auditable claim, not proof. Settlement is manual review.
 - Use the **same tag** as the one on your dashboard account — settlement joins on it.
 - Migrating from the sequencer-side `ref` field (pre-0.13.0)? It still records, and KRON merges both

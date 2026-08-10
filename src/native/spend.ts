@@ -254,6 +254,12 @@ export function toPsktJson(asm: AssembledNativeTx, sighashType = 1): { txJsonStr
  * signed P2PK input — authorize them, so the wallet never signs a covenant P2SH input directly. This is
  * exactly what an extension wallet's native `signPskt({ txJsonString, options: { signInputs } })` does; use
  * this function to emulate that bridge with a raw key (e.g. for a backend bot holding its own key).
+ *
+ * It is also the CORRECT shape for such a bridge, and worth diffing against if you implement one: it
+ * deserializes the transaction it was given and signs in place. A bridge that instead REBUILDS the tx from
+ * a subset of fields drops `tx.payload`, which consensus commits to the signature hash — the node then
+ * rejects with "script ran, but verification failed". That only shows up on payload-carrying (partner-
+ * tagged) transactions, so it hides from every test that signs an untagged trade.
  */
 export function signPsktWithKey(k: K, txJsonString: string, signInputs: { index: number }[], privKey: any): string {
   const kk = k as any;

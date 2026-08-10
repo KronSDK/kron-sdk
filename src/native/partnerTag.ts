@@ -33,6 +33,11 @@ const toHex = (s: string): string => Array.from(new TextEncoder().encode(s), (b)
  * Partner tag → the hex payload to set on the transaction. Returns `''` for a missing or malformed tag and
  * NEVER throws: an untaggable trade must still be buildable. Note a silently-dropped tag earns nothing, so
  * validate with `REF_RE` at your configuration boundary rather than relying on this to tell you.
+ *
+ * SET THIS BEFORE SIGNING. Consensus commits `tx.payload` to the signature hash, so a tag applied after
+ * signatures are collected invalidates them, and a wallet whose `signPskt` computes that hash without
+ * covering `payload` fails the same way ("script ran, but verification failed" from the node, on tagged
+ * transactions only). See `signPsktWithKey` in `spend.ts` for the reference signing behavior.
  */
 export function encodePartnerTag(ref?: string | null): string {
   const r = String(ref ?? '').trim().toLowerCase();
