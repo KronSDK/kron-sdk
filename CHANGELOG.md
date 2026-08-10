@@ -3,6 +3,25 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.17.1
+
+### Fixed — `SequencerClient` pool endpoints are keyed by TICK, not pool P2SH
+`head()`, `events()`, and the docs said `poolP2sh`; the deployed sequencer has always keyed pools by the
+token tick (the pool's P2SH moves with its state, so it was never a usable key — a P2SH got an
+unknown-pool gate). Parameters renamed to `tick`; passing a tick was already correct at runtime, so this
+is a docs/signature fix, not a behavior change.
+
+### Added — `SequencerClient.status(tick, txid)`
+The sequencer's view of a submitted tx: `broadcasting`, `accepted`, `rejected`, `broadcast-ambiguous`,
+`confirmed`, `dropped`, or `unknown`. Check it after a submit timeout **before** re-submitting a rebuilt
+tx directly — `broadcast-ambiguous` means the original may already be in the mempool, and a rebuilt tx
+(new txid) would double-spend your own funding inputs.
+
+### Docs — attribution wording
+`submit()`'s `ref` doc no longer claims "only sequencer-routed trades carry attribution"; the canonical
+path is the on-chain payload tag (`encodePartnerTag`), credited whether you submit through the sequencer
+or straight to a node. `INTEGRATION.md` §6 documents `/status` and the tick keying.
+
 ## 0.17.0
 
 ### Breaking — `buildAddLiquidity` now fails closed on the counterfeit-LP gate

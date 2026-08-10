@@ -1,6 +1,7 @@
 // Typed wrapper for KRON's sequencer (docs/INTEGRATION.md §6 in the kron repo). A non-custodial batcher
 // that orders signed txs into a valid mempool chain — it never holds keys. Covers BOTH markets:
-//   • graduated-pool swaps (`/head` + `/submit`, keyed by the pool P2SH), and
+//   • graduated-pool swaps (`/head` + `/submit`, keyed by the token TICK — not the pool P2SH; the pool's
+//     P2SH address moves with its state, the tick is the stable key), and
 //   • pre-graduation bonding-curve buys/sells (`/curve/head` + `/curve/submit`, keyed by the curve covid) —
 //     the curve is also a single mutable UTXO, so trades chain exactly like pool swaps.
 // Direct node submission also works under low contention; the sequencer is a convenience for hot markets.
@@ -41,9 +42,11 @@ export class SequencerClient {
   }
 
   /** The in-flight head + queue depth for a pool — use this instead of the indexer's confirmed `poolhead`
-   *  when the pool is busy, so you build on the latest unconfirmed state. */
-  async head(poolP2sh: string): Promise<SequencerHead> {
-    const res = await fetch(`${this.baseUrl}/head?pool=${encodeURIComponent(poolP2sh)}`);
+   *  when the pool is busy, so you build on the latest unconfirmed state.
+   *  `tick` is the token TICK (e.g. 'pepe'), NOT the pool P2SH — earlier releases named this parameter
+   *  `poolP2sh`, but the deployed sequencer has always keyed pools by tick; a P2SH gets an unknown-pool gate. */
+  async head(tick: string): Promise<SequencerHead> {
+    const res = await fetch(`${this.baseUrl}/head?pool=${encodeURIComponent(tick)}`);
     if (!res.ok) throw new Error(`sequencer head -> HTTP ${res.status}`);
     return res.json();
   }
@@ -51,10 +54,11 @@ export class SequencerClient {
   /** Enqueue a signed swap tx built against a `head()` snapshot. A 409-shaped `{ok:false, retry:true}`
    *  means `prevHead` is stale — re-fetch `head()` and rebuild.
    *
-   *  `ref` (optional) — your wallet-integrator partner tag (kron.technology/wallets): 2–32 chars of
-   *  `a-z 0-9 - _`, case-insensitive. Tagged trades are recorded server-side per-trade and count toward
-   *  your revenue share; a malformed tag is rejected with 400 so a misconfigured integration fails on the
-   *  first submit rather than silently at settlement. Only sequencer-routed trades carry attribution. */
+   *  `ref` (optional) — your partner tag (kron.technology/wallets): 2–32 chars of `a-z 0-9 - _`,
+   *  case-insensitive. A malformed tag is rejected with 400 so a misconfigured integration fails on the
+   *  first submit rather than silently at settlement. NOTE: the canonical attribution path is the ON-CHAIN
+   *  payload tag (`encodePartnerTag` — UTF-8 `kron:r:<ref>` hex-encoded in `tx.payload`), which is credited
+   *  route-independently (sequencer or direct submission); this field is the legacy sequencer-side record. */
   async submit(body: {
     pool: string;
     signedTx: string;
@@ -97,11 +101,23 @@ export class SequencerClient {
     return res.json();
   }
 
-  /** SSE: head changes for a pool. Same Node-EventSource caveat as IndexerClient.stream. */
-  events(poolP2sh: string, onEvent: (data: unknown) => void, EventSourceImpl?: typeof EventSource): () => void {
+  /** The sequencer's view of a submitted tx: `state` is one of `broadcasting`, `accepted`, `rejected`,
+   *  `broadcast-ambiguous`, `confirmed`, `dropped` (chain evicted), or `unknown` (never seen / aged out).
+   *  On-chain acceptance is the settlement truth; poll this (or subscribe to `events()`) after `submit()`.
+   *  `broadcast-ambiguous` means the tx may already be in the mempool — do NOT re-submit a REBUILT tx
+   *  (new txid) on a timeout without checking here first, or you can double-spend your own funding inputs. */
+  async status(tick: string, txid: string): Promise<{ ok: boolean; known: boolean; state: string; txid: string }> {
+    const res = await fetch(`${this.baseUrl}/status?pool=${encodeURIComponent(tick)}&txid=${encodeURIComponent(txid)}`);
+    if (!res.ok) throw new Error(`sequencer status -> HTTP ${res.status}`);
+    return res.json();
+  }
+
+  /** SSE: head changes for a pool (`tick`, same key as `head()`). Same Node-EventSource caveat as
+   *  IndexerClient.stream. */
+  events(tick: string, onEvent: (data: unknown) => void, EventSourceImpl?: typeof EventSource): () => void {
     const ES = EventSourceImpl ?? (globalThis as any).EventSource;
     if (!ES) throw new Error('No EventSource available — in Node, pass EventSourceImpl (e.g. from the "eventsource" package)');
-    const es = new ES(`${this.baseUrl}/events?pool=${encodeURIComponent(poolP2sh)}`);
+    const es = new ES(`${this.baseUrl}/events?pool=${encodeURIComponent(tick)}`);
     es.onmessage = (ev: MessageEvent) => { try { onEvent(JSON.parse(ev.data)); } catch { /* ignore malformed events */ } };
     return () => es.close();
   }

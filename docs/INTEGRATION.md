@@ -414,23 +414,35 @@ supports (`markets: ['pool','curve']`).
 
 ```
 GET  /health
-GET  /head?pool={poolP2SH}        # pool: current in-flight head + queue depth
-GET  /events?pool={poolP2SH}      # pool: SSE head changes
+GET  /head?pool={tick}            # pool: current in-flight head + queue depth (param is the token TICK)
+GET  /events?pool={tick}          # pool: SSE head changes
 POST /submit                      # pool: enqueue a signed swap
+GET  /status?pool={tick}&txid={txid}  # pool: this tx's lifecycle in the sequencer's view
 GET  /curve/head?covid={covid}    # curve: current in-flight head + queue depth
 POST /curve/submit                # curve: enqueue a signed buy/sell
 ```
 
+The pool endpoints are keyed by the **token tick** (e.g. `pepe`), never the pool P2SH — the pool's
+address moves with its state (`lpCovid` bind, `totalShares` changes), so the tick is the stable key.
+Earlier releases of this doc and `SequencerClient` said `poolP2SH`; a P2SH has never matched.
+
+`/status` returns `{ ok, known, state, txid }` with `state` one of `broadcasting`, `accepted`,
+`rejected`, `broadcast-ambiguous`, `confirmed`, `dropped` (chain evicted), or `unknown` (never seen,
+or aged out). On-chain acceptance remains the settlement truth. After a submit-then-timeout, check
+`/status` before re-submitting a REBUILT tx directly — `broadcast-ambiguous` means the original may
+already be in the mempool, and a rebuilt tx (new txid) would double-spend your own funding inputs.
+Prefer the `/events` SSE stream over polling for head changes.
+
 Pool swap flow:
 
-1. `sequencer.head(poolP2sh)` → the in-flight head `{ head, depth }` (use this instead of the indexer's
+1. `sequencer.head(tick)` → the in-flight head `{ head, depth }` (use this instead of the indexer's
    confirmed `poolhead` when the pool is busy, so you build on the latest unconfirmed state).
 2. Build + sign the swap tx against that head.
 3. `sequencer.submit({...})` → `{ ok: true, txid, position }` on accept, or `{ ok: false, reason, retry:
    true }` if your `prevHead` is stale (re-fetch head and rebuild).
 
 Curve trade flow (pre-graduation buys/sells) is the same shape, keyed by the token's **curve covenant
-id** instead of the pool P2SH:
+id** instead of the tick:
 
 1. `sequencer.curveHead(curveCovid)` → `{ head, depth }`. `head: null` means no chain is in flight —
    build against the confirmed curve state from the node/indexer instead.
@@ -525,7 +537,7 @@ Complete runnable version: [`scripts/example-kcc20-send.mjs`](../scripts/example
 
 ### TG bot / wallet — swap a graduated token
 
-1. `sequencer.head(poolP2sh)` for the in-flight head, or `indexer.poolhead(tick)` if quiet.
+1. `sequencer.head(tick)` for the in-flight head, or `indexer.poolhead(tick)` if quiet.
 2. Build `amm_pool_cp_v3.swap` (`kron.poolCpV3.*`) against that head, user signs.
 3. `sequencer.submit({...})` (or submit to the node directly).
 
