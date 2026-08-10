@@ -475,6 +475,23 @@ boundary — `assembleNativeTx` silently drops an invalid tag to an empty payloa
 still build), and a dropped tag earns nothing. Cost, security model, and settlement details:
 [BUILDING-TRADES.md § Partner attribution](BUILDING-TRADES.md#partner-attribution-integrator-program).
 
+**Known wallet limitation — browser signing and `payload`** (reported by kascov, 2026-08-10). Kaspa commits
+`tx.payload` to the signature hash, so the tag must be present *before* the transaction is signed and must
+survive signing untouched. Some wallet extensions compute their `signPskt` signature hash without covering
+`payload`; a tagged trade signed by one of those is rejected by the node with **"script ran, but
+verification failed"**, while the identical trade untagged confirms normally. If you hit that error *only*
+on tagged trades:
+
+1. Check that the payload is already in the `txJsonString` you hand to `signPskt`. Applying the tag *after*
+   the signature comes back produces the same failure on your own side.
+2. If it is present going in, the wallet is dropping it. Report it to the wallet vendor and fall back to
+   untagged trades meanwhile — the trade itself is unaffected, only the attribution is lost.
+
+Reference behavior is `kron.spend.signPsktWithKey` (`src/native/spend.ts`): deserialize the Safe-JSON, sign
+the listed inputs, re-serialize, never rebuild the transaction. Server-side signers holding a raw key are
+unaffected, which is why this does not surface in backend integrations. KIP-12 states the rule as a wallet
+**MUST** (Transaction Signing for Covenants).
+
 **Legacy sequencer-side `ref` (pre-0.13.0).** The optional `ref` field on `submit()`/`curveSubmit()` still
 works — the sequencer records tagged relays, and KRON merges both attribution sources deduped by txid. But
 it structurally sees only sequencer-routed trades (that blind spot is why the payload tag exists), so treat

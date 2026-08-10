@@ -22,6 +22,14 @@ tx directly — `broadcast-ambiguous` means the original may already be in the m
 path is the on-chain payload tag (`encodePartnerTag`), credited whether you submit through the sequencer
 or straight to a node. `INTEGRATION.md` §6 documents `/status` and the tick keying.
 
+### Docs — known wallet limitation: browser signing and `payload`
+Kaspa commits `tx.payload` to the signature hash. A wallet whose `signPskt` computes that hash without
+covering `payload` returns a signature that the node rejects with "script ran, but verification failed" —
+but *only* on tagged trades, so it reads as a partner-attribution bug rather than a signing one. Documented
+in `INTEGRATION.md` § Partner attribution, with the check that distinguishes a payload-blind wallet from a
+tag applied after signing, and flagged inline on the README beside the `ref` example. Reported by kascov,
+2026-08-10.
+
 ## 0.17.0
 
 ### Breaking — `buildAddLiquidity` now fails closed on the counterfeit-LP gate

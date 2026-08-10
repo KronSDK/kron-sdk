@@ -307,6 +307,12 @@ Audit your credited volume straight from chain —
 Costs ~0.00003 KAS per trade; no covenant logic is touched. Full details:
 [docs/BUILDING-TRADES.md § Partner attribution](docs/BUILDING-TRADES.md#partner-attribution-integrator-program).
 
+> **Signing a tagged trade in the browser.** Kaspa commits `tx.payload` to the signature hash, so the tag
+> must be set *before* signing and survive it untouched. Some wallet extensions compute their `signPskt`
+> hash without covering `payload`; a tagged trade then fails with "script ran, but verification failed"
+> while the same trade untagged confirms. Server-side raw-key signers are unaffected. Diagnosis and
+> workaround: [docs/INTEGRATION.md § Partner attribution](docs/INTEGRATION.md#partner-attribution).
+
 ## Design notes
 
 - **ESM-only in v1.** The vendored wasm-bindgen glue (`kaspa.js`) is ESM with a top-level `import.meta.url`
