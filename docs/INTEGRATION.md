@@ -1,7 +1,8 @@
 # KRON integration guide
 
-> Mainnet integration surface. KRON is live on Kaspa **mainnet**; there is no KRON testnet (TN10 was
-> retired at the mainnet migration). Endpoints and shapes below are stable to build against.
+> Mainnet integration surface. KRON is live on Kaspa **mainnet**; a permanent staging deployment runs on
+> TN10 at `https://krontest.xyz` for free write-path testing (faucet TKAS). Endpoints and shapes below are
+> stable to build against.
 
 This guide is for anyone integrating KRON — wallets, Telegram bots, explorers, analytics, trading UIs. The
 running examples are framed around a **wallet extension** and a **Telegram bot** because those are the two
@@ -57,10 +58,11 @@ All services are live on Kaspa **mainnet**.
 | **Node** (wRPC) | `wss://node.kron.technology` | Kaspa wRPC (borsh) over wss — UTXO set, submit tx. `mainnet`. |
 | **Frontend** | `https://kron.technology` | Reference UI (useful for cross-checking behavior). |
 
-`network` everywhere = `mainnet`. There is no KRON testnet — TN10 was retired at the mainnet migration —
-so validate write paths with one small real trade (see §9). The `kron-sdk` REST clients take `baseUrl` as
-an explicit constructor argument (no baked-in default), so pointing at a different deployment is a
-one-line change, not a version bump.
+`network` everywhere = `mainnet`. To validate write paths for free, use the permanent TN10 staging
+deployment (`https://krontest.xyz`, wallet on `testnet-10`, faucet TKAS; same host shape —
+`api.krontest.xyz` / `idx.krontest.xyz` / `seq.krontest.xyz`) — or one small real mainnet trade (see §9).
+The `kron-sdk` REST clients take `baseUrl` as an explicit constructor argument (no baked-in default), so
+pointing at staging instead of prod is a one-line change, not a version bump.
 
 ---
 
@@ -258,9 +260,13 @@ id and is non-null only post-graduation (that's what DEX screeners key on) — t
 interchangeable. The default list is **chain-verified only** (anti-phishing); `?all=1` adds unverified
 entries tagged `extensions.chainVerified:false`.
 
-**The list is not platform-signed — verify each entry against the chain yourself.** Each entry carries a
-`genesisTxid` proof pointer; `verify.verifyTokenListEntry` confirms the entry's `covenantId` is genuinely
-created on that tx (present as a `covenant_id` on one of its outputs), so a spoofed entry can't pass:
+**The list is platform-signed, and entries are independently chain-verifiable — use both.** The document
+carries `signature`/`publicKey` over the `KRON-TOKENLIST-1` canonical form; `verify.verifyTokenListSignature`
+checks it (pin the platform key out-of-band and pass `pinnedPublicKey` — with no pin it's trust-on-first-use
+against the response's own key). The signature proves the list came from KRON unaltered; it does *not* make
+an entry true. For that, each entry carries a `genesisTxid` proof pointer, and `verify.verifyTokenListEntry`
+confirms the entry's `covenantId` is genuinely created on that tx (present as a `covenant_id` on one of its
+outputs), so a spoofed entry can't pass even inside a correctly-signed list:
 
 ```ts
 import { client, verify } from '@kronsdk/kron-sdk';
@@ -599,9 +605,10 @@ Complete runnable version: [`scripts/example-kcc20-send.mjs`](../scripts/example
 
 ## 9. Caveats & support
 
-- **Mainnet only — no testnet.** KRON runs on Kaspa mainnet; TN10 was retired at the mainnet migration.
-  Reads and transaction *building* are free (public endpoints, no funds needed) — validate the signed
-  write path with one small real trade before shipping.
+- **Production is mainnet; staging is TN10.** KRON runs on Kaspa mainnet, with a permanent staging
+  deployment at `https://krontest.xyz` (testnet-10). Reads and transaction *building* are free everywhere
+  (public endpoints, no funds needed) — validate the signed write path on staging with faucet TKAS, or
+  with one small real mainnet trade, before shipping.
 - **Wallet signing is a documented contract, not a bundled integration** — see `docs/WALLETS.md` for the
   `WalletAdapter` interface and a generic reference implementation to adapt to your wallet's provider.
 - **Confirmation lag.** Reads reflect accepted, confirmation-buried state — expect ~seconds after a write.

@@ -47,6 +47,11 @@ yet should throw a clear, typed error (see `WalletCapabilityError`), never silen
 best-guess signature. A wrong-but-silent signature over the wrong sighash is a fund-safety bug, not just an
 API mismatch.
 
+If your adapter *has* a `signPskt` implementation but deliberately disables it (e.g. pending the §3
+acceptance test on a mainnet build), set the optional `signingGate` string to a human-readable reason —
+dApps surface it verbatim in their trade gates, so users see *why* signing is off instead of a generic
+"connect a different wallet".
+
 ## Writing your own adapter
 
 1. Implement `WalletAdapter` (see `src/wallet/types.ts`), using `example.ts` as a starting point.

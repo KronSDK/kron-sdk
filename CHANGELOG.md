@@ -3,6 +3,22 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.17.2
+
+### Added — `WalletAdapter.signingGate` (optional)
+A human-readable reason an adapter can set when it *has* a `signPskt` implementation but deliberately
+disables it (e.g. pending the WALLETS.md §3 covenant-signing acceptance test on a mainnet build). dApps
+surface it verbatim in their trade gates, distinguishing "gated, here's why" from "wallet genuinely lacks
+the capability". Type-only, additive — no behavior change for existing adapters.
+
+### Docs
+- README no longer claims "there is no KRON testnet": the permanent TN10 staging environment
+  (krontest.xyz) runs a testnet build, so the §3 acceptance test and write-path validation are free with
+  faucet TKAS (mainnet remains an option). Same correction in `docs/WALLETS.md`.
+- `docs/INTEGRATION.md`: new *Browser access (CORS) & rate limits* section (what browser contexts can call
+  directly and the per-IP ceilings), and the previously undocumented
+  `GET /api/registry/token/{covenantId}/descriptor` endpoint with its cache/rate-limit contract.
+
 ## 0.17.1
 
 ### Fixed — `SequencerClient` pool endpoints are keyed by TICK, not pool P2SH

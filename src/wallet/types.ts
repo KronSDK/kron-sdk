@@ -41,6 +41,11 @@ export interface WalletAdapter {
    * existing wallets without KRON ever holding a key. See ../native/spend.ts `toPsktJson`.
    */
   signPskt?(txJsonString: string, signInputs: { index: number; sighashType?: number }[]): Promise<string>;
+  /** Set when this wallet HAS a signPskt implementation that is deliberately disabled (e.g. pending the
+   *  WALLETS.md covenant-signing acceptance test on a mainnet build). Human-readable; dApps surface it
+   *  verbatim in their trade gates. Absent = a missing signPskt means the wallet genuinely lacks the
+   *  capability. */
+  readonly signingGate?: string;
   /** The connected account's 32-byte x-only pubkey hex (the curve/pool fee owner at deploy, or a
    *  presence-owned token's owner identifier). null if unavailable. */
   getXOnlyPublicKey?(): Promise<string | null>;

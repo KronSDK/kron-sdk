@@ -4,7 +4,7 @@
 — a bonding-curve launchpad + AMM DEX — from any JS/TS environment.** Browser or Node. No custody, ever:
 this package only *builds* transactions; a wallet (yours, or your user's) signs them.
 
-> **Status: v0.16.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.17.2, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract (which is
 > [KIP-12](https://github.com/kaspanet/kips/pull/44)) and how to adapt it to a specific wallet's injected
@@ -89,7 +89,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.16.0      # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.17.2      # or pin an exact version for reproducible builds
 ```
 
 The package follows semver — **just install `@latest`**; there's no reason to pin an older release. Anything
@@ -251,8 +251,9 @@ What this package does **not** independently verify: full VM-level execution of 
 requires the Kaspa `cli-debugger` + the private KRON repo's verifier suite, which also holds the covenant
 sources and compiler this package doesn't ship) and on-chain broadcast (no network access from a clean
 install). If you're integrating funds-critical logic, treat `scripts/e2e-offline-flow.mjs` as a smoke test,
-not a substitute for a real transaction. **There is no KRON testnet** — TN10 was retired at the mainnet
-migration — so validate the write path with one small mainnet trade before shipping. Reads and transaction
+not a substitute for a real transaction. Validate the write path for free on KRON's permanent TN10 staging
+environment (`https://krontest.xyz`, wallet on `testnet-10`, faucet TKAS) — or with one small mainnet
+trade before shipping. Reads and transaction
 *building* need no funds: the registry, the indexer and the template-compile endpoint are all public.
 
 The strongest guarantee here is **byte-parity**: `npm run verify:parity` compiles the live covenant sources
