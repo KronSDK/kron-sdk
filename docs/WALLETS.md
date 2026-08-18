@@ -57,8 +57,8 @@ API mismatch.
 3. Test the `signPskt` path specifically against a real transaction with **both** a covenant input and a
    user P2PK input (e.g. a KRON curve buy) — signing a plain send is not sufficient coverage, since it
    never exercises the "only sign these specific inputs, leave the rest alone" requirement that makes
-   covenant transactions work. There is no KRON testnet (TN10 was retired at the mainnet migration), so
-   run this acceptance test as one small mainnet trade.
+   covenant transactions work. Run it for free on KRON's permanent TN10 staging environment
+   (`https://krontest.xyz`, wallet on `testnet-10`, faucet TKAS) — or as one small mainnet trade.
 
 ## Getting paid: partner attribution
 

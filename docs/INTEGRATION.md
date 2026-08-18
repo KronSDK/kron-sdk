@@ -239,7 +239,9 @@ GET https://api.kron.technology/api/registry/tokens   # { tokens: [...] }
 The indexer is the source of truth for *amounts and trading state*; the registry holds *display metadata*
 the creator signed (name, description, https image, website/x/telegram links, the `cp` deploy record). Join
 them by `tick` / `covenantId`. Registry writes are signature-gated to the on-chain creator key —
-integrators generally only **read** this (`RegistryClient.tokens()`).
+integrators generally only **read** this (`RegistryClient.tokens()`). Note this endpoint is **server-side
+only** (no open CORS — see *Browser access* below); browser-context integrators use the token list +
+descriptors instead, which cover the same display identity in the integrator-facing shape.
 
 ### Token list — for wallets / explorers / aggregators
 
@@ -279,6 +281,41 @@ for (const entry of list.tokens) {
 **not** re-derive the curve script from params (the SDK has no covenant compiler); the covenant-id-on-genesis
 check is the achievable, sufficient anti-spoof proof. For a full cryptographic re-derivation, feed the init
 tx's outpoint + authorized outputs to `genesis.genesisCovenantId`.
+
+### Token descriptors — machine identity per token
+
+```
+GET https://api.kron.technology/api/registry/token/{covenantId}/descriptor
+```
+
+Each token-list entry's `descriptorURI` points here: the machine-readable identity record for one token
+(pinned template version, deploy params, covenant ids). Descriptors are **static per token** — fetch once
+and cache (they're edge-cached 1 hour). The route is rate-limited to ~30 requests/min per IP because each
+cold fetch drives a template compile on the backend: a client that walks every `descriptorURI` in the list
+on every page load will hit 429s, and one that caches per token never will.
+
+### Browser access (CORS) & rate limits
+
+No API keys — the read API is public and limits are per client IP. What a **browser context** (wallet
+extension, web app, explorer frontend) can call directly:
+
+| Host | CORS | Notes |
+|---|---|---|
+| `idx.kron.technology` (all `/v1/kcc20/*` reads + SSE) | `*` — open | The integrator read plane; built for this. |
+| `api.…/api/registry/tokenlist`, `api.…/api/registry/token/{covid}/descriptor` | `*` — open | The two registry reads designed for third parties. |
+| everything else on `api.kron.technology` | locked | Server-side only (session-backed / mutating routes). |
+| `seq.kron.technology` | locked | Server-side only today. If you're building **browser-side trading** and need the sequencer from a page context, contact us — this is a deliberate policy, not an oversight. |
+
+Rate limits (subject to tuning; all responses are per-IP):
+
+- **Indexer:** 3000 requests/min per IP across the API (`/health` exempt). Over-limit returns `429` with
+  `Retry-After: 60` — honor it; don't tight-loop. SSE: 30 concurrent streams per IP. One stream +
+  targeted reads replaces polling — see §"Live updates".
+- **Descriptors:** ~30/min per IP (compile-driving — cache per token, see above).
+- **Token list:** cached 60 s at the edge; poll at that cadence or slower.
+
+These are abuse ceilings, not usage budgets — a well-behaved wallet serving one user sits orders of
+magnitude below all of them.
 
 ---
 
