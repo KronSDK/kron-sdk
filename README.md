@@ -4,7 +4,7 @@
 — a bonding-curve launchpad + AMM DEX — from any JS/TS environment.** Browser or Node. No custody, ever:
 this package only *builds* transactions; a wallet (yours, or your user's) signs them.
 
-> **Status: v0.17.2, mainnet.** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.18.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract (which is
 > [KIP-12](https://github.com/kaspanet/kips/pull/44)) and how to adapt it to a specific wallet's injected
@@ -14,6 +14,10 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > that either gets transactions **rejected on-chain** or produces a **wrong quote**. The floors, newest
 > first (full detail per version in the [CHANGELOG](CHANGELOG.md)):
 >
+> - **≤ 0.17.2** — builders speak only the **legacy covenant ABI**. Against a token launched on the current
+>   (recipient-bound, `bdbcfb2540d1…`) schema, every trade and LP transaction is **rejected by the
+>   covenant** — funds never move wrong, the tx just bounces. 0.18.0 adds the recipient-bound ABI, gated
+>   per token by template discriminators (see rule 4 below); tokens pinned to older schemas are unaffected.
 > - **≤ 0.15.0** — builders emitted a bare `COVENANT_DUST` on covenant-owned CONTINUATION outputs (curve
 >   inventory, pool token reserve, pool L inventory). Tokens launched on the **value-continuation covenant**
 >   enforce `out.value >= in.value` there, so against a reserve someone has PADDED above the dust that
@@ -33,7 +37,7 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > - **< 0.6.0** — built version-0 transactions with no covenant bindings; nothing that old can produce a
 >   valid spend at all.
 >
-> **Three rules every integrator must follow** (the code gives you the helpers; you have to call them):
+> **Four rules every integrator must follow** (the code gives you the helpers; you have to call them):
 >
 > - Gate `poolCp.buildAddLiquidity` on **`IndexerClient.assertLpBindSafe(tick)`**, then pass the fetched
 >   verdict as `opts.lpBindVerified`. Since **0.17.0 that option is required and fails closed** — omitting it
@@ -47,6 +51,11 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 >   **`covenantSelect.continuationValue(dust, inputValue)`**, and add **`covenantSelect.carrierShortfall`** to
 >   your funding. Getting this wrong produces transactions consensus rejects, with no attacker involved —
 >   see [docs/INTEGRATING-KCC20-UTXOS.md](docs/INTEGRATING-KCC20-UTXOS.md).
+> - **Hydrate template ABI flags with `client.shapeCpTemplates`** (0.18.0+). Which covenant ABI a token
+>   speaks is pinned per token and echoed by the `cp-template` endpoint; the shaping helper maps that echo
+>   onto the builders' template flags (`recipientBound`, `zeroRemoveAllowed`, `canonicalInventoryRequired`).
+>   Hand-shape the response and miss a flag, and you build legacy-ABI transactions every new-schema token
+>   rejects. See [docs/BUILDING-TRADES.md § Recipient-bound schemas](docs/BUILDING-TRADES.md#recipient-bound-schemas-the-current-covenant-abi--requires--0180).
 
 ## Why this exists
 
@@ -89,7 +98,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.17.2      # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.18.0      # or pin an exact version for reproducible builds
 ```
 
 The package follows semver — **just install `@latest`**; there's no reason to pin an older release. Anything
@@ -133,9 +142,11 @@ console.log(`100 KAS -> ${quote.tokenOut} tokens, fee ${quote.fee} sompi`);
 const sell = kron.curve.quoteCpSell(cpState, 5_000n);
 if (!sell) console.log('too small to sell — the fixed fee outputs cost more than this returns');
 
-// 4. Build the covenant spend against the LIVE curve. `cpTemplate`/`tokenTemplate` need the target's
-//    already-compiled script bytes + state offset — read them from your indexer's UTXO data
-//    (redeemScriptHex etc.), this package doesn't compile them.
+// 4. Build the covenant spend against the LIVE curve. `cpTemplate`/`tokenTemplate` come from KRON's
+//    `POST /api/native/cp-template` endpoint (this package doesn't compile them) — shape the response
+//    with `kron.client.shapeCpTemplates`, which also hydrates the per-token covenant-ABI flags
+//    (`recipientBound` etc.; 0.18.0+). Templates are static per token — fetch once and cache.
+//    See docs/BUILDING-TRADES.md.
 //
 //    curveUtxo/inventoryUtxo: fetch these via `client.SequencerClient.curveHead(curveCovid)`, NOT by
 //    deriving the curve's address yourself from the indexer's `cpState.tokenReserve` and searching for
@@ -224,7 +235,7 @@ kron-sdk
 ├─ spend              tx assembly + the signPskt-style wallet-signing bridge
 ├─ partnerTag         on-chain integrator attribution: encode/parse the partner tag carried in tx.payload
 ├─ wallet             WalletAdapter interface, a generic reference adapter, + cross-wallet provider discovery
-├─ client             typed REST clients: indexer, registry (incl. tokenlist()), sequencer
+├─ client             typed REST clients (indexer, registry incl. tokenlist(), sequencer) + shapeCpTemplates
 ├─ verify             verify a token-list entry against the chain (anti-spoof, fetcher-injected)
 └─ /wasm              loadKaspa() — the only environment-specific (Node vs browser) export
 ```
@@ -258,7 +269,10 @@ trade before shipping. Reads and transaction
 
 The strongest guarantee here is **byte-parity**: `npm run verify:parity` compiles the live covenant sources
 and asserts that this package's builders produce transactions byte-identical to KRON's production builders —
-across both the dev-fund and legacy fee ABIs — and that the per-input compute budgets match. It runs
+across the dev-fund and legacy fee ABIs **and** the recipient-bound covenant ABI (0.18.0+, including the
+pinned KAS legs, padded-carrier continuations, and an end-to-end check that the real backend's template
+echo hydrates the ABI flags through `client.shapeCpTemplates`) — and that the per-input compute budgets
+match. It runs
 automatically in `prepublishOnly`. It needs the (private) KRON repo and the covenant compiler checked out
 locally, and **fails closed (exit 1) when they're absent**. Environments that legitimately lack the private
 toolchain — external forks, public CI — set `KRON_PARITY_OPTIONAL=1` to skip with a visible notice instead;

@@ -50,16 +50,18 @@ export const POOL_V3_SELECTOR = { swapKasForToken: 0, swapTokenForKas: 1, addLiq
 const hexOf = (u8: Uint8Array): string => Array.from(u8, (b) => b.toString(16).padStart(2, '0')).join('');
 const p2pkSpk = (k: any, pubkey: Uint8Array) => { const sb = new k.ScriptBuilder(); sb.addData(pubkey).addOp(172); return new k.ScriptPublicKey(0, sb.drain()); };
 
-function v3SwapBuySig(k: K, redeem: Uint8Array, kasInUnits: bigint, tokenOut: bigint, poolTokenOut: Kcc20State, traderTokenOut: Kcc20State): string {
+function v3SwapBuySig(k: K, redeem: Uint8Array, kasInUnits: bigint, tokenOut: bigint, poolTokenOut: Kcc20State, traderTokenOut: Kcc20State, recipient?: { witness: number; pubkey: Uint8Array }): string {
   const b = new SigScriptBuilder(k).int(kasInUnits).int(tokenOut);
   pushKcc20StateScalar(b, poolTokenOut); pushKcc20StateScalar(b, traderTokenOut);
+  if (recipient) b.int(BigInt(recipient.witness)).data(recipient.pubkey);   // HLK-L12: (traderWitness, traderIdentifier)
   return b.selector(POOL_V3_SELECTOR.swapKasForToken).redeem(redeem).drain();
 }
 // v3 sell takes (kasOut, poolTokenOut, traderChangeOut) — the change state is pushed even on a full sell (the
 // covenant only validates it when a 2nd covid-A output exists; otherwise it's an ignored placeholder).
-function v3SwapSellSig(k: K, redeem: Uint8Array, kasOutUnits: bigint, poolTokenOut: Kcc20State, traderChangeOut: Kcc20State): string {
+function v3SwapSellSig(k: K, redeem: Uint8Array, kasOutUnits: bigint, poolTokenOut: Kcc20State, traderChangeOut: Kcc20State, recipient?: { witness: number; pubkey: Uint8Array }): string {
   const b = new SigScriptBuilder(k).int(kasOutUnits);
   pushKcc20StateScalar(b, poolTokenOut); pushKcc20StateScalar(b, traderChangeOut);
+  if (recipient) b.int(BigInt(recipient.witness)).data(recipient.pubkey);   // HLK-L12: (traderWitness, traderIdentifier)
   return b.selector(POOL_V3_SELECTOR.swapTokenForKas).redeem(redeem).drain();
 }
 
@@ -76,6 +78,9 @@ export function buildPoolV3SwapKasForToken(
   // Merge tokens are presence-owned: their kcc20 witness MUST be a co-present signed P2PK funding input.
   // Input 0 is the pool covenant (no signature), so the default 0 would fail the on-chain presence check.
   if (mergeTokens.length > 0 && presenceWitnessIdx === 0) throw new Error('presenceWitnessIdx must be set to a co-present signed P2PK funding input when mergeTokens is non-empty (input 0 is the pool covenant and carries no signature)');
+  // HLK-L12: on a recipient-bound schema the covenant proves tx.inputs[traderWitness] is the trader's own
+  // P2PK — a witness pointing at a covenant input (pool, pool token, merges) can never satisfy it.
+  if (tpl.recipientBound && presenceWitnessIdx < 2 + mergeTokens.length) throw new Error('swapKasForToken on a recipient-bound schema needs presenceWitnessIdx past the covenant inputs');
   const dust = opts.tokenDust ?? COVENANT_DUST;
   const { kasReserve, tokenReserve, tokenCovid, totalShares, lpCovid } = utxo.state;
   const poolCovidHex = hexOf(poolCovid);
@@ -89,8 +94,9 @@ export function buildPoolV3SwapKasForToken(
   // covid-A inputs: pool token (witness=pool input 0), then each merged existing token (presence → P2PK witness).
   const witnesses = [0, ...mergeTokens.map(() => presenceWitnessIdx)];
   const newStates = [poolTokenOut, traderTokenOut];
+  const recipient = tpl.recipientBound ? { witness: presenceWitnessIdx, pubkey: traderPubkey } : undefined;
   const inputs: CovInput[] = [
-    { transactionId: utxo.transactionId, index: utxo.index, value: kasReserve * SCALE, scriptPublicKey: poolCpV3Spk(k, curRedeem), signatureScript: v3SwapBuySig(k, curRedeem, q.kasInUnits, q.tokenOut, poolTokenOut, traderTokenOut), redeem: curRedeem, role: 'pool' },
+    { transactionId: utxo.transactionId, index: utxo.index, value: kasReserve * SCALE, scriptPublicKey: poolCpV3Spk(k, curRedeem), signatureScript: v3SwapBuySig(k, curRedeem, q.kasInUnits, q.tokenOut, poolTokenOut, traderTokenOut, recipient), redeem: curRedeem, role: 'pool' },
     { transactionId: utxo.tokenUtxo.transactionId, index: utxo.tokenUtxo.index, value: utxo.tokenUtxo.value, scriptPublicKey: kcc20Spk(k, poolTokInRedeem), signatureScript: transferSigScript(k, poolTokInRedeem, newStates, witnesses), redeem: poolTokInRedeem, role: 'poolToken' },
     ...mergeTokens.map((tt) => {
       const r = materializeKcc20Script(tokenTpl, tt.state);
@@ -109,7 +115,9 @@ export function buildPoolV3SwapKasForToken(
 
 /** swapTokenForKas (v3 — FRACTIONAL): fold `q.tokenIn` of the trader's piece(s) into the pool, getting kasOut;
  *  the UNSOLD remainder (Σ trader inputs − q.tokenIn) returns as ONE presence-owned change output (placed LAST).
- *  Outputs: [0]=pool [1]=pool token(P) [2]=creatorFee [3]=platformFee [4]=OPTIONAL trader change(presence). */
+ *  Outputs (recipientBound): [0]=pool [1]=pool token(P) [2]=creatorFee [3]=platformFee [4]=KAS→trader(P2PK,
+ *  HLK-L12) [5]=OPTIONAL trader change(presence).
+ *  Outputs (legacy): [0]=pool [1]=pool token(P) [2]=creatorFee [3]=platformFee [4]=OPTIONAL trader change. */
 export function buildPoolV3SwapTokenForKas(
   k: K, tpl: PoolCpV3Template, tokenTpl: Kcc20Template, params: PoolV3Params,
   utxo: PoolCpV3Utxo, poolCovid: Uint8Array, traderPubkey: Uint8Array,
@@ -117,6 +125,9 @@ export function buildPoolV3SwapTokenForKas(
   q: PoolCpSellQuote, presenceWitnessIdx: number, opts: { tokenDust?: bigint } = {},
 ): CovenantSpend {
   if (traderTokens.length < 1) throw new Error('need at least one trader token');
+  // HLK-L12: on a recipient-bound schema the covenant proves tx.inputs[traderWitness] is the trader's own
+  // P2PK — a witness pointing at a covenant input (pool, pool token, trader tokens) can never satisfy it.
+  if (tpl.recipientBound && presenceWitnessIdx < 2 + traderTokens.length) throw new Error('swapTokenForKas on a recipient-bound schema needs presenceWitnessIdx past the covenant inputs');
   const dust = opts.tokenDust ?? COVENANT_DUST;
   const { kasReserve, tokenReserve, tokenCovid, totalShares, lpCovid } = utxo.state;
   const poolCovidHex = hexOf(poolCovid);
@@ -131,10 +142,12 @@ export function buildPoolV3SwapTokenForKas(
   const newRedeem = materializePoolCpV3Script(tpl, { kasReserve: q.newKas, tokenReserve: q.newToken, tokenCovid, totalShares, lpCovid });
   const poolTokInRedeem = materializeKcc20Script(tokenTpl, covenantIdOwned(poolCovid, tokenReserve, false));
   const witnesses = [0, ...traderTokens.map(() => presenceWitnessIdx)];
-  // covid-A outputs in tx order: pool reserve first (idx 1), then the change LAST (idx 4) when present.
+  // covid-A outputs in tx order: pool reserve first (idx 1), then the change LAST when present (idx 4 legacy,
+  // idx 5 on a recipient-bound schema — the KAS leg sits at 4).
   const newStates = hasChange ? [poolTokenOut, traderChangeOut] : [poolTokenOut];
+  const recipient = tpl.recipientBound ? { witness: presenceWitnessIdx, pubkey: traderPubkey } : undefined;
   const inputs: CovInput[] = [
-    { transactionId: utxo.transactionId, index: utxo.index, value: kasReserve * SCALE, scriptPublicKey: poolCpV3Spk(k, curRedeem), signatureScript: v3SwapSellSig(k, curRedeem, q.kasOutUnits, poolTokenOut, traderChangeOut), redeem: curRedeem, role: 'pool' },
+    { transactionId: utxo.transactionId, index: utxo.index, value: kasReserve * SCALE, scriptPublicKey: poolCpV3Spk(k, curRedeem), signatureScript: v3SwapSellSig(k, curRedeem, q.kasOutUnits, poolTokenOut, traderChangeOut, recipient), redeem: curRedeem, role: 'pool' },
     { transactionId: utxo.tokenUtxo.transactionId, index: utxo.tokenUtxo.index, value: utxo.tokenUtxo.value, scriptPublicKey: kcc20Spk(k, poolTokInRedeem), signatureScript: transferSigScript(k, poolTokInRedeem, newStates, witnesses), redeem: poolTokInRedeem, role: 'poolToken' },
     ...traderTokens.map((tt) => {
       const r = materializeKcc20Script(tokenTpl, tt.state);
@@ -146,6 +159,10 @@ export function buildPoolV3SwapTokenForKas(
     { value: continuationValue(dust, utxo.tokenUtxo.value), scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
     { value: q.creatorOut, scriptPublicKey: p2pkSpk(k, params.creatorFeeOwner), role: 'creatorFee' },
     { value: q.platformOut, scriptPublicKey: p2pkSpk(k, params.platformFeeOwner), role: 'platformFee' },
+    // HLK-L12: the trader's KAS proceeds are an explicit output pinned at SWAP_KAS_OUT=4, floored against the
+    // RAW bps fees (the covenant's floor); any fee-output padding (creatorOut/platformOut vs the raw fees) is
+    // funded from the trader's own inputs. Plain P2PK, no covenant binding (like the fee legs).
+    ...(tpl.recipientBound ? [{ value: q.kasOut - q.creatorFee - q.platformFee, scriptPublicKey: p2pkSpk(k, traderPubkey), role: 'traderKas' as const }] : []),
   ];
   if (hasChange) outputs.push({ value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, traderChangeOut)), role: 'trader', binding: { covid: tokenCovidHex, authorizingInput: 1 } });
   return { kind: 'swapTokenForKas', inputs, outputs, economics: { kasOut: q.kasOut, tokenIn: q.tokenIn }, covids: { poolCovid: poolCovidHex, tokenCovid: tokenCovidHex } };

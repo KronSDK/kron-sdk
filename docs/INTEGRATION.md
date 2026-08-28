@@ -351,7 +351,12 @@ covenant compiler or the `.sil` sources, and doesn't build the deploy/genesis tr
 
 - **`curve_cp.buy` / `sell`** (`kron.curveCp.buildCpBuy` / `buildCpSell`) — pre-graduation trades against
   the virtual-reserve curve. One buyer per tx (single-UTXO curve); batched execution is a separate roadmap
-  track.
+  track. **Recipient-bound schemas (≥ 0.18.0):** tokens on the current covenant schema require the
+  buyer/seller to co-sign the P2PK input `presenceWitnessIdx` points at, and the sigscript gains two
+  appended args — gated per token by `curveTpl.recipientBound` / `poolTpl.recipientBound`. Hydrate the
+  flags with `kron.client.shapeCpTemplates` and see *Recipient-bound schemas* in
+  [BUILDING-TRADES.md](BUILDING-TRADES.md) for the witness-index and output-layout rules (the pool's
+  KAS-releasing legs pin the proceeds as explicit P2PK outputs).
 - **`curve_cp.graduate`** (`kron.curveCp.buildCpGraduate`) — seeds the pool once the raise target is hit
   (anyone can call; usually triggered by the trade that crosses the threshold).
 - **`amm_pool_cp_v3.swap`** (`kron.poolCpV3.buildPoolV3SwapKasForToken` / `buildPoolV3SwapTokenForKas`) —
@@ -393,8 +398,10 @@ A covenant spend only validates on-chain as a KIP-20 **version-1** transaction:
   the binding when you pass the covenant id (e.g. `buildKcc20Send`'s `tokenCovid` — the `covenantId`
   from `indexer.token(tick)`); for custom spends set `spend.outputs[i].binding = { covid, authorizingInput }`
   before assembling.
-- **`computeBudget` on every input** (v1 replaces `sigOpCount`): P2PK funding ≈ 10, a kcc20 transfer
-  input ≈ 500, a curve/pool input ≈ 2000. `assembleNativeTx` applies role-based defaults.
+- **`computeBudget` on every input** (v1 replaces `sigOpCount`): P2PK funding = 10, a kcc20 transfer
+  input = 100, a curve/pool input = 400 (`kron.spend.FUNDING_COMPUTE` / `TOKEN_COMPUTE` /
+  `COVENANT_COMPUTE` — read the constants rather than hardcoding; earlier docs said 500/2000, which
+  over-declares and over-pays). `assembleNativeTx` applies role-based defaults.
 - **Fees must cover the compute budget** (grams = budget × 100) on top of byte/storage mass — a flat
   legacy fee (e.g. 5000 sompi) is too low. Size with `kron.spend.estimateNativeFee`.
 - **Covenant outputs carry ≥ 0.5 KAS** (`kron.spend.COVENANT_DUST`) for KIP-9 storage mass. That is an
@@ -591,14 +598,17 @@ Complete runnable version: [`scripts/example-kcc20-send.mjs`](../scripts/example
 2. `sequencer.curveHead(curveCovid)` for the live spendable outpoint — see §4 "Curve state" and
    §6. Don't derive the curve's address yourself from indexer state and search for its UTXO; that
    path races the indexer and intermittently fails on busy curves.
-3. Build `curve_cp.buy` (`kron.curveCp.buildCpBuy`) against that head, user signs, submit
-   (`sequencer.curveSubmit`, or direct to the node).
+3. Build `curve_cp.buy` (`kron.curveCp.buildCpBuy`) against that head — templates from `cp-template`,
+   shaped with `kron.client.shapeCpTemplates` so the token's covenant-ABI flags ride along
+   ([BUILDING-TRADES.md](BUILDING-TRADES.md)) — user signs, submit (`sequencer.curveSubmit`, or direct
+   to the node).
 4. Watch `indexer.stream({tick})` for confirmation, then re-read the balance.
 
 ### TG bot / wallet — swap a graduated token
 
 1. `sequencer.head(tick)` for the in-flight head, or `indexer.poolhead(tick)` if quiet.
-2. Build `amm_pool_cp_v3.swap` (`kron.poolCpV3.*`) against that head, user signs.
+2. Build `amm_pool_cp_v3.swap` (`kron.poolCpV3.*`) against that head (templates via `cp-template` +
+   `kron.client.shapeCpTemplates`, as in the curve recipe), user signs.
 3. `sequencer.submit({...})` (or submit to the node directly).
 
 ---

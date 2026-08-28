@@ -474,5 +474,254 @@ console.log(`\nparity: SDK dist vs kron reference builders (curve template ${cur
   }
 }
 
+// --- RECIPIENT-BOUND SCHEMA ABI (HLK-L04 curve / HLK-L12 pool) + HLK-L07 zero-payout burn -----------------
+// The Hashlock fix schema (`bdbcfb2540d1…`) changed the buy/sell and pool entrypoint ABIs: every value-
+// releasing entrypoint takes an appended (witness, identifier) recipient pair, and the two KAS-releasing pool
+// legs (swapTokenForKas / removeLiquidity) pin the trader/LP KAS proceeds as an explicit P2PK output. All of
+// it is gated on per-template discriminators (`recipientBound` / `zeroRemoveAllowed`), absent ⇒ legacy ABI —
+// which is exactly why every fixture ABOVE kept passing while the SDK lacked the new ABI entirely: they all
+// pass legacy templates. These fixtures set the flags and compare the NEW ABI byte-for-byte, plus
+// reference-independent invariants on the parts an identically-wrong pair could hide.
+{
+  console.log('\nrecipient-bound schema ABI parity (HLK-L04 / HLK-L12 / HLK-L07) — the fix-schema builders');
+  const SCALE_ = 1000000n;
+  const poolCovid = bytesOf('ee'.repeat(32));
+  const curveTplRB = { ...curveTpl, recipientBound: true };
+  const poolTplRB = { script: poolV2Tpl.script, stateStart: poolV2Tpl.stateStart, recipientBound: true };
+  const poolTplRBCanonical = { ...poolTplRB, canonicalInventoryRequired: true, zeroRemoveAllowed: true };
+  const swapState = { kasReserve: 78763432n, tokenReserve: 31891357n, totalShares: 1149416n, tokenCovid: bytesOf(TOKEN_COVID), lpCovid: bytesOf('dd'.repeat(32)) };
+  const swapParams = { creatorFeeOwner: bytesOf(CREATOR), platformFeeOwner: bytesOf(PLATFORM), creatorFeeBps: 10n, platformFeeBps: 70n, lpFeeBps: 20n, lockedShares: 1000000n };
+  const lpParams = { lockedShares: BigInt(POOL_LOCKED) };
+  // Both sides must REFUSE a recipient witness pointing at a covenant input — the covenant's presence proof
+  // can never accept one, so building it would only defer the failure to a VM rejection.
+  const throwsBoth = (name, fa, fb) => {
+    let ra = false, rb = false;
+    try { fa(); } catch { ra = true; }
+    try { fb(); } catch { rb = true; }
+    console.log(`  ${ra && rb ? 'PASS' : 'FAIL'}  ${name} (ref ${ra ? 'threw' : 'BUILT'}, sdk ${rb ? 'threw' : 'BUILT'})`);
+    if (!(ra && rb)) fails++;
+  };
+
+  // curve buy/sell (HLK-L04): the appended (witness, identifier) pair in the curve sigscript.
+  {
+    const inv = { transactionId: '11'.repeat(32), index: 0, value: 1000n, amount: 500000n };
+    const utxo = { transactionId: ZERO_COVID, index: 0, realKas: 0n, state: { graduated: false, tokenCovid: bytesOf(TOKEN_COVID), tokenReserve: 500000n } };
+    const buyArgs = (w) => [kaspa, curveTplRB, tokenTpl, utxo, inv, bytesOf(CURVE_COVID), bytesOf(BUYER), 1000000n, 99n, [], w, { tokenDust: 50_000_000n }];
+    cmp('curve buy (recipient-bound)', M.buildCpBuy(...buyArgs(2)), S.buildCpBuy(...buyArgs(2)));
+    throwsBoth('curve buy redirect attempt refused (witness at a covenant input)', () => M.buildCpBuy(...buyArgs(1)), () => S.buildCpBuy(...buyArgs(1)));
+
+    const sUtxo = { transactionId: ZERO_COVID, index: 0, realKas: 10000000n, state: { graduated: false, tokenCovid: bytesOf(TOKEN_COVID), tokenReserve: 400000n } };
+    const sInv = { transactionId: '22'.repeat(32), index: 0, value: 1000n, amount: 400000n };
+    const seller = { transactionId: '33'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(TRADER), 500n) };
+    const sellArgs = (w) => [kaspa, curveTplRB, tokenTpl, sUtxo, [seller], sInv, bytesOf(CURVE_COVID), bytesOf(TRADER), 160n, 2000000n, w, { tokenDust: 50_000_000n }];
+    cmp('curve sell (recipient-bound, fractional change)', M.buildCpSell(...sellArgs(3)), S.buildCpSell(...sellArgs(3)));
+    throwsBoth('curve sell redirect attempt refused', () => M.buildCpSell(...sellArgs(2)), () => S.buildCpSell(...sellArgs(2)));
+    // Full-UTXO sell under recipientBound: the placeholder traderChangeOut is still pushed in the sigscript
+    // BEFORE the appended recipient pair while the change output is omitted — a distinct branch from the
+    // fractional case above (the legacy section pins its own full-UTXO fixture; this is the RB twin).
+    const s2 = { transactionId: '33'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(TRADER), 160n) };
+    const fullArgs = [kaspa, curveTplRB, tokenTpl, sUtxo, [s2], sInv, bytesOf(CURVE_COVID), bytesOf(TRADER), 160n, 2000000n, 3, { tokenDust: 50_000_000n }];
+    cmp('curve sell (recipient-bound, full-UTXO)', M.buildCpSell(...fullArgs), S.buildCpSell(...fullArgs));
+  }
+
+  // pool swaps (HLK-L12): the appended pair + the pinned trader KAS leg at SWAP_KAS_OUT=4 on the sell side.
+  {
+    const utxo = { transactionId: '77'.repeat(32), index: 0, state: swapState, tokenUtxo: { transactionId: '78'.repeat(32), index: 0, value: 1000n } };
+    const qBuy = MP.quotePoolCpBuy(swapState, swapParams, 50n * SCALE_);
+    const buyArgs = (w) => [kaspa, poolTplRB, tokenTpl, swapParams, utxo, poolCovid, bytesOf(BUYER), qBuy, [], w, { tokenDust: 50_000_000n }];
+    cmp('swapKasForToken (recipient-bound)', MP3.buildPoolV3SwapKasForToken(...buyArgs(2)), SP3.buildPoolV3SwapKasForToken(...buyArgs(2)));
+    throwsBoth('swapKasForToken redirect attempt refused', () => MP3.buildPoolV3SwapKasForToken(...buyArgs(1)), () => SP3.buildPoolV3SwapKasForToken(...buyArgs(1)));
+
+    // FRACTIONAL sell (600000 in, 500000 folded) so the full recipient-bound layout is exercised: the KAS leg
+    // at SWAP_KAS_OUT=4 AND the trader change shifted to 5 (legacy put change at 4).
+    const qSell = MP.quotePoolCpSell(swapState, swapParams, 500000n);
+    const traderTokens = [{ transactionId: '7b'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), 600000n) }];
+    const sellArgs = (w) => [kaspa, poolTplRB, tokenTpl, swapParams, utxo, poolCovid, bytesOf(BUYER), traderTokens, qSell, w, { tokenDust: 50_000_000n }];
+    const ref = MP3.buildPoolV3SwapTokenForKas(...sellArgs(3)), sdk = SP3.buildPoolV3SwapTokenForKas(...sellArgs(3));
+    cmp('swapTokenForKas (recipient-bound)', ref, sdk);
+    throwsBoth('swapTokenForKas redirect attempt refused', () => MP3.buildPoolV3SwapTokenForKas(...sellArgs(2)), () => SP3.buildPoolV3SwapTokenForKas(...sellArgs(2)));
+    // Reference-independent invariant (an identically-wrong pair would pass cmp): the trader's KAS proceeds
+    // are output 4, floored against the RAW bps fees — not the padded fee outputs, not builder-chosen change.
+    const leg = sdk.outputs[4];
+    const okLeg = leg?.role === 'traderKas' && leg.value === qSell.kasOut - qSell.creatorFee - qSell.platformFee
+      && sdk.outputs[5]?.role === 'trader';
+    console.log(`  ${okLeg ? 'PASS' : 'FAIL'}  trader KAS leg pinned at output 4 = kasOut − raw fees (got role=${leg?.role} value=${leg?.value}, expected ${qSell.kasOut - qSell.creatorFee - qSell.platformFee}); change follows at 5`);
+    if (!okLeg) fails++;
+  }
+
+  // pool LP ops (HLK-L12): recipient pair on add/remove + the pinned LP KAS leg at REMOVE_KAS_OUT=2.
+  {
+    const mkState = (kasReserve, tokenReserve, totalShares) => ({ kasReserve, tokenReserve, totalShares, tokenCovid: bytesOf(TOKEN_COVID), lpCovid: bytesOf('dd'.repeat(32)) });
+    const state = mkState(4040n, 202000n, 1010n);
+    const utxo = { transactionId: '55'.repeat(32), index: 0, state, tokenUtxo: { transactionId: '66'.repeat(32), index: 0, value: 1000n } };
+    const lpInv = { transactionId: '88'.repeat(32), index: 0, value: 1000n, amount: 10_000_000n - state.totalShares };
+
+    const qAdd = MP.quoteAddLiquidity(state, 40n);
+    const lpDeposit = { transactionId: '99'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), qAdd.dToken) };
+    const addArgs = (w) => [kaspa, poolTplRBCanonical, tokenTpl, utxo, lpInv, poolCovid, lpDeposit, bytesOf(BUYER), qAdd, w, { tokenDust: 50_000_000n, lpBindVerified: true }];
+    cmp('addLiquidity (recipient-bound)', MP.buildAddLiquidity(...addArgs(4)), SP.buildAddLiquidity(...addArgs(4)));
+    throwsBoth('addLiquidity redirect attempt refused', () => MP.buildAddLiquidity(...addArgs(3)), () => SP.buildAddLiquidity(...addArgs(3)));
+
+    const qRem = MP.quoteRemoveLiquidity(state, lpParams, 10n);
+    const lpShares = { transactionId: 'aa'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), qRem.dShares) };
+    const remArgs = (w) => [kaspa, poolTplRBCanonical, tokenTpl, utxo, lpShares, poolCovid, bytesOf(BUYER), qRem, w, { lpInventory: lpInv, tokenDust: 50_000_000n }];
+    const ref = MP.buildRemoveLiquidity(...remArgs(4)), sdk = SP.buildRemoveLiquidity(...remArgs(4));
+    cmp('removeLiquidity (recipient-bound, dual-sided)', ref, sdk);
+    throwsBoth('removeLiquidity redirect attempt refused', () => MP.buildRemoveLiquidity(...remArgs(3)), () => SP.buildRemoveLiquidity(...remArgs(3)));
+    // Invariant: the LP's KAS is output 2 (AFTER the reserve, so reserve.index−1 pool-pointer derivation
+    // holds) and equals dKas·SCALE exactly.
+    const leg = sdk.outputs[2];
+    const okLeg = sdk.outputs[1]?.role === 'poolToken' && leg?.role === 'lpKas' && leg.value === qRem.dKas * SCALE_;
+    console.log(`  ${okLeg ? 'PASS' : 'FAIL'}  LP KAS leg pinned at output 2 = dKas·SCALE, reserve stays at output 1 (got role=${leg?.role} value=${leg?.value}, expected ${qRem.dKas * SCALE_})`);
+    if (!okLeg) fails++;
+
+    // SINGLE-SIDED removes under recipientBound — the layout branches unique to the new ABI, where the two
+    // conditional spreads interleave (`lpKas` iff dKas>0, `lpToken` iff dToken>0). Neither combination is
+    // pinned anywhere else: kron's VM suite hand-rolls the one-sided tx JSON rather than calling the builder,
+    // and the legacy single-sided fixture above doesn't set recipientBound — so a composition drift here
+    // would ship with every other gate green. Both combinations occur on live pool shapes (token-heavy pools
+    // floor dKas to 0 on small withdrawals; inverted pools floor dToken to 0).
+    {
+      // dKas>0 / dToken=0: KAS leg at 2, NO lpToken, inventory last.
+      const st = mkState(1_000_000_000n, 1n, 1_000_001n);
+      const q = MP.quoteRemoveLiquidity(st, lpParams, 1n);
+      if (q.dToken !== 0n || q.dKas === 0n) throw new Error('fixture no longer floors dToken to zero — adjust the state');
+      const u = { transactionId: '55'.repeat(32), index: 0, state: st, tokenUtxo: { transactionId: '66'.repeat(32), index: 0, value: 1000n } };
+      const inv = { transactionId: '88'.repeat(32), index: 0, value: 1000n, amount: 10_000_000n - st.totalShares };
+      const sh = { transactionId: 'aa'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), q.dShares) };
+      const a = [kaspa, poolTplRBCanonical, tokenTpl, u, sh, poolCovid, bytesOf(BUYER), q, 4, { lpInventory: inv, tokenDust: 50_000_000n }];
+      const r = MP.buildRemoveLiquidity(...a), s = SP.buildRemoveLiquidity(...a);
+      cmp('removeLiquidity (recipient-bound, single-sided dToken=0)', r, s);
+      const ok = s.outputs[2]?.role === 'lpKas' && s.outputs[2].value === q.dKas * SCALE_
+        && !s.outputs.some((o) => o.role === 'lpToken') && s.outputs[s.outputs.length - 1]?.role === 'poolLpInventory';
+      console.log(`  ${ok ? 'PASS' : 'FAIL'}  dToken=0: KAS leg at 2, lpToken omitted, inventory last`);
+      if (!ok) fails++;
+    }
+    {
+      // dKas=0 / dToken>0: NO KAS leg, lpToken directly after the reserve at 2.
+      const st = mkState(1n, 1_000_000_000n, 1_000_001n);
+      const q = MP.quoteRemoveLiquidity(st, lpParams, 1n);
+      if (q.dKas !== 0n || q.dToken === 0n) throw new Error('fixture no longer floors dKas to zero — adjust the state');
+      const u = { transactionId: '55'.repeat(32), index: 0, state: st, tokenUtxo: { transactionId: '66'.repeat(32), index: 0, value: 1000n } };
+      const inv = { transactionId: '88'.repeat(32), index: 0, value: 1000n, amount: 10_000_000n - st.totalShares };
+      const sh = { transactionId: 'aa'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), q.dShares) };
+      const a = [kaspa, poolTplRBCanonical, tokenTpl, u, sh, poolCovid, bytesOf(BUYER), q, 4, { lpInventory: inv, tokenDust: 50_000_000n }];
+      const r = MP.buildRemoveLiquidity(...a), s = SP.buildRemoveLiquidity(...a);
+      cmp('removeLiquidity (recipient-bound, single-sided dKas=0)', r, s);
+      const ok = !s.outputs.some((o) => o.role === 'lpKas') && s.outputs[2]?.role === 'lpToken';
+      console.log(`  ${ok ? 'PASS' : 'FAIL'}  dKas=0: no KAS leg, lpToken directly after the reserve`);
+      if (!ok) fails++;
+    }
+
+    // HLK-L07 zero-payout burn: on a shares-heavy pool a small redemption floors BOTH sides to zero; the fix
+    // schema accepts it (shares burn to inventory) with NO KAS leg and NO lpToken output — legacy layout.
+    const heavy = mkState(1000n, 2000n, 1_000_000n);
+    const hUtxo = { transactionId: '55'.repeat(32), index: 0, state: heavy, tokenUtxo: { transactionId: '66'.repeat(32), index: 0, value: 1000n } };
+    const hInv = { transactionId: '88'.repeat(32), index: 0, value: 1000n, amount: 10_000_000n - heavy.totalShares };
+    const qa = MP.quoteRemoveLiquidity(heavy, lpParams, 499n, { allowZeroPayout: true });
+    const qb = SP.quoteRemoveLiquidity(heavy, lpParams, 499n, { allowZeroPayout: true });
+    const j = (q) => JSON.stringify(q, (_, v) => (typeof v === 'bigint' ? v.toString() : v));
+    console.log(`  ${j(qa) === j(qb) ? 'PASS' : 'FAIL'}  quoteRemoveLiquidity allowZeroPayout parity (dKas=${qa.dKas} dToken=${qa.dToken})`);
+    if (j(qa) !== j(qb)) fails++;
+    const hShares = { transactionId: 'aa'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), qa.dShares) };
+    const hArgs = [kaspa, poolTplRBCanonical, tokenTpl, hUtxo, hShares, poolCovid, bytesOf(BUYER), qa, 4, { lpInventory: hInv, tokenDust: 50_000_000n }];
+    const hRef = MP.buildRemoveLiquidity(...hArgs), hSdk = SP.buildRemoveLiquidity(...hArgs);
+    cmp('removeLiquidity (recipient-bound, HLK-L07 zero-payout burn)', hRef, hSdk);
+    const noLegs = !hSdk.outputs.some((o) => o.role === 'lpKas' || o.role === 'lpToken');
+    console.log(`  ${noLegs ? 'PASS' : 'FAIL'}  zero-payout burn emits no KAS leg and no lpToken output (legacy layout)`);
+    if (!noLegs) fails++;
+  }
+
+  // PADDED-CARRIER fixtures — the round-1 parity gap. Every fixture above feeds a covenant carrier worth
+  // ≤ dust, where continuationValue(dust, input) === dust, so a builder that regressed to emitting the bare
+  // constant would stay byte-identical and pass. These feed a PADDED carrier (input > dust) and pin, both by
+  // parity and by invariant, that the continuation tracks the input.
+  {
+    const PAD = 123_456_789n;   // > the 50,000,000n explicit dust
+    const inv = { transactionId: '11'.repeat(32), index: 0, value: PAD, amount: 500000n };
+    const utxo = { transactionId: ZERO_COVID, index: 0, realKas: 0n, state: { graduated: false, tokenCovid: bytesOf(TOKEN_COVID), tokenReserve: 500000n } };
+    const a = [kaspa, curveTplRB, tokenTpl, utxo, inv, bytesOf(CURVE_COVID), bytesOf(BUYER), 1000000n, 99n, [], 2, { tokenDust: 50_000_000n }];
+    const ref = M.buildCpBuy(...a), sdk = S.buildCpBuy(...a);
+    cmp('curve buy (recipient-bound, PADDED inventory carrier)', ref, sdk);
+    const okPad = sdk.outputs[1].value === PAD;
+    console.log(`  ${okPad ? 'PASS' : 'FAIL'}  padded inventory continuation tracks the input (got ${sdk.outputs[1].value}, expected ${PAD})`);
+    if (!okPad) fails++;
+
+    const pUtxo = { transactionId: '79'.repeat(32), index: 0, state: swapState, tokenUtxo: { transactionId: '7a'.repeat(32), index: 0, value: PAD } };
+    const q = MP.quotePoolCpSell(swapState, swapParams, 500000n);
+    const traderTokens = [{ transactionId: '7b'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), 500000n) }];
+    const pa = [kaspa, poolTplRB, tokenTpl, swapParams, pUtxo, poolCovid, bytesOf(BUYER), traderTokens, q, 3, { tokenDust: 50_000_000n }];
+    const pRef = MP3.buildPoolV3SwapTokenForKas(...pa), pSdk = SP3.buildPoolV3SwapTokenForKas(...pa);
+    cmp('swapTokenForKas (recipient-bound, PADDED pool-token carrier)', pRef, pSdk);
+    const okPPad = pSdk.outputs[1].value === PAD;
+    console.log(`  ${okPPad ? 'PASS' : 'FAIL'}  padded pool-token continuation tracks the input (got ${pSdk.outputs[1].value}, expected ${PAD})`);
+    if (!okPPad) fails++;
+    // This fixture is DELIBERATELY a full sell (500000 of 500000) — it is the RB full-sell branch's only
+    // byte coverage (the main RB sell fixture is fractional), so pin the layout explicitly: no trader change,
+    // the KAS leg is the LAST output. Do not "fix" it to fractional without adding a dedicated full-sell case.
+    const okFull = !pSdk.outputs.some((o) => o.role === 'trader') && pSdk.outputs[pSdk.outputs.length - 1]?.role === 'traderKas';
+    console.log(`  ${okFull ? 'PASS' : 'FAIL'}  full sell: no trader change, KAS leg is the last output`);
+    if (!okFull) fails++;
+  }
+}
+
+// --- DISCRIMINATOR HYDRATION end-to-end (backend echo → client.shapeCpTemplates → builders) ---------------
+// shapeCpTemplates is the single point that decides which ABI the SDK emits, and the sections above construct
+// their template flags BY HAND — so a drift in the backend echo's field names (or an inverted sniff) would
+// silently hydrate recipientBound=false for every integrator, building legacy-ABI transactions every
+// fix-schema covenant rejects, with every other gate green. Close that hole by running the REAL backend
+// compiler (the same module `POST /api/native/cp-template` serves) through the SDK's shaping and asserting
+// the flags — true on the current schema, false on a pre-round-2 archived pin — then feeding the shaped
+// current-schema templates straight into the builders for byte-parity on production-shaped objects.
+{
+  console.log('\ndiscriminator hydration end-to-end (backend cp-template echo → client.shapeCpTemplates)');
+  process.env.SILVERC = SILVERC;   // nativeTemplates.mjs reads it at import time
+  const NT = await import(pathToFileURL(`${KRON}/backend/nativeTemplates.mjs`).href);
+  const CL = SDK_MOD.client;
+  const reqParams = {
+    creatorFeeOwner: CREATOR, platformFeeOwner: PLATFORM,
+    vKas, graduationKas, creatorFeeBps: cB, platformFeeBps: pB, graduationFeeBps: gB,
+    dexCreatorFeeBps: DEX_C, dexPlatformFeeBps: DEX_P, dexLpFeeBps: LP_BPS, poolLockedShares: POOL_LOCKED,
+    devFundOwner: DEV_FUND, devFundBps: devBps, tokenCovid: TOKEN_COVID,
+  };
+
+  const cur = NT.compileCpTemplates({ ...reqParams, templateVersion: null });
+  const shaped = CL.shapeCpTemplates(cur);
+  const okCur = shaped.curve.recipientBound === true && shaped.pool.recipientBound === true
+    && shaped.pool.zeroRemoveAllowed === true && shaped.pool.canonicalInventoryRequired === true
+    && shaped.curve.params.devFundBps === BigInt(devBps) && shaped.curve.params.vKas === BigInt(vKas);
+  console.log(`  ${okCur ? 'PASS' : 'FAIL'}  current schema hydrates ALL fix-schema flags true (curve.rb=${shaped.curve.recipientBound} pool.rb=${shaped.pool.recipientBound} zeroRemove=${shaped.pool.zeroRemoveAllowed} canonical=${shaped.pool.canonicalInventoryRequired})`);
+  if (!okCur) fails++;
+
+  // Pre-round-2 archived pin (the KRN pre-audit-fix schema): recipient flags MUST come back false — the
+  // fail-safe direction. An absence-blind mapping that defaulted a flag true would corrupt every old-pinned
+  // token's arg stack.
+  const ARCHIVED_PRE_L12 = 'a9b901ac9269099d9f1be60af7f7aae1eeb508cc0b80e190a782aa3440926921';
+  const arch = NT.compileCpTemplates({ ...reqParams, templateVersion: { schema: ARCHIVED_PRE_L12 } });
+  const shapedA = CL.shapeCpTemplates(arch);
+  const okArch = shapedA.curve.recipientBound === false && shapedA.pool.recipientBound === false
+    && shapedA.pool.zeroRemoveAllowed === false && shapedA.pool.canonicalInventoryRequired === true;
+  console.log(`  ${okArch ? 'PASS' : 'FAIL'}  archived pre-round-2 pin (${ARCHIVED_PRE_L12.slice(0, 12)}…) hydrates recipient flags false (curve.rb=${shapedA.curve.recipientBound} pool.rb=${shapedA.pool.recipientBound} zeroRemove=${shapedA.pool.zeroRemoveAllowed})`);
+  if (!okArch) fails++;
+
+  // Builder byte-parity ON THE SHAPED OBJECTS — proves the shaped templates (production compile, echo-derived
+  // params and flags, tokenCovid baked) drive both implementations to identical bytes, not just the
+  // hand-flagged parity-ctor templates above.
+  {
+    const inv = { transactionId: '11'.repeat(32), index: 0, value: 1000n, amount: 500000n };
+    const utxo = { transactionId: ZERO_COVID, index: 0, realKas: 0n, state: { graduated: false, tokenCovid: bytesOf(TOKEN_COVID), tokenReserve: 500000n } };
+    const a = [kaspa, shaped.curve, shaped.token, utxo, inv, bytesOf(CURVE_COVID), bytesOf(BUYER), 1000000n, 99n, [], 2, { tokenDust: 50_000_000n }];
+    cmp('curve buy (echo-shaped current-schema template)', M.buildCpBuy(...a), S.buildCpBuy(...a));
+
+    const swapState = { kasReserve: 78763432n, tokenReserve: 31891357n, totalShares: 1149416n, tokenCovid: bytesOf(TOKEN_COVID), lpCovid: bytesOf('dd'.repeat(32)) };
+    const swapParams = { creatorFeeOwner: bytesOf(CREATOR), platformFeeOwner: bytesOf(PLATFORM), creatorFeeBps: 10n, platformFeeBps: 70n, lpFeeBps: 20n, lockedShares: 1000000n };
+    const pUtxo = { transactionId: '79'.repeat(32), index: 0, state: swapState, tokenUtxo: { transactionId: '7a'.repeat(32), index: 0, value: 1000n } };
+    const q = MP.quotePoolCpSell(swapState, swapParams, 500000n);
+    const traderTokens = [{ transactionId: '7b'.repeat(32), index: 0, value: 1000n, state: addressPresenceOwned(bytesOf(BUYER), 600000n) }];
+    const pa = [kaspa, shaped.pool, shaped.token, swapParams, pUtxo, bytesOf('ee'.repeat(32)), bytesOf(BUYER), traderTokens, q, 3, { tokenDust: 50_000_000n }];
+    cmp('swapTokenForKas (echo-shaped current-schema template)', MP3.buildPoolV3SwapTokenForKas(...pa), SP3.buildPoolV3SwapTokenForKas(...pa));
+  }
+}
+
 console.log(`\n${fails === 0 ? '✓ PARITY OK — SDK builders are byte-identical to the covenant-verified reference' : '✗ ' + fails + ' PARITY MISMATCH(ES) — SDK has drifted from the covenant; do not publish'}`);
 process.exit(fails === 0 ? 0 : 1);

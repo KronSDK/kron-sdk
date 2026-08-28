@@ -3,6 +3,75 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.18.0
+
+### Added — recipient-bound covenant ABI (HLK-L04 / HLK-L07 / HLK-L12): trade new-schema tokens
+
+The builders now speak the current KRON covenant schema's (`bdbcfb2540d1…`, Hashlock round-2 fix set)
+recipient-bound ABI. Previously an SDK-built trade against a new-schema token was rejected by the covenant
+(it bounced — funds never moved wrong); tokens pinned to older schemas were, and remain, unaffected. All of
+it is gated on per-template discriminators — **absent flags mean the legacy ABI**, so existing integrations
+against live tokens build byte-identical transactions to 0.17.x.
+
+- **Curve buy/sell (HLK-L04).** `CpTemplate` gained `recipientBound`. When set, `buildCpBuy`/`buildCpSell`
+  append the (recipientWitness, recipientIdentifier) pair to the curve sigscript, and require
+  `presenceWitnessIdx` to point past the covenant inputs at the buyer's/seller's own signed P2PK funding
+  input (throwing at build time otherwise — the covenant's presence proof can never accept a covenant
+  input).
+- **Pool swaps + LP ops (HLK-L12).** `PoolCpTemplate` gained `recipientBound`. All four pool entrypoints
+  append the same recipient pair; the two KAS-releasing legs additionally pin the proceeds as an explicit
+  P2PK output: `buildPoolV3SwapTokenForKas` emits the trader's `kasOut − rawCreatorFee − rawPlatformFee` at
+  output 4 (`role: 'traderKas'`; the optional trader change shifts to 5), and `buildRemoveLiquidity` emits
+  the LP's `dKas·SCALE` at output 2, right after the reserve (`role: 'lpKas'`; dKas > 0 only). The same
+  witness-index build guards apply (≥ 4 on add/removeLiquidity).
+- **Zero-payout LP redemption (HLK-L07).** `PoolCpTemplate` gained `zeroRemoveAllowed`;
+  `quoteRemoveLiquidity` and `snapRemoveDShares` accept `{ allowZeroPayout }` (pass the flag through) so a
+  both-sides-zero redemption — legal on fix-schema pools, shares burn to the L inventory — quotes instead
+  of throwing. Legacy callers are unchanged.
+- **`client.shapeCpTemplates`** — the one mapping from the `POST /api/native/cp-template` response's params
+  echo onto the template objects, discriminators included (`tradeRecipientBound` → curve,
+  `poolRecipientBound` → pool, `zeroRemoveAllowed`, `canonicalLpInventory`). Use it instead of hand-shaping
+  the response; a missed flag builds transactions every new-schema token rejects. See the new
+  *Recipient-bound schemas* section in `docs/BUILDING-TRADES.md`.
+
+### Changed
+
+- `buildCpSell` now rejects a full drain (`kasOut == realKas`) on **every** schema (HLK-L05): the resulting
+  zero-value curve output is rejected by Kaspa consensus (TxOutZero) regardless, so the SDK fails at build
+  time with a clear message instead.
+- `buildAddLiquidity` validates `lpInventory.amount == MAX_SHARES − totalShares` on
+  `canonicalInventoryRequired` templates (mirroring `buildRemoveLiquidity`'s existing check) and derives the
+  reduced inventory from `MAX_SHARES − newShares` — identical bytes for every honest call, but a stale
+  inventory UTXO now fails at build time instead of on-chain.
+
+### Verification
+
+`verify:parity` gained a recipient-bound section: byte-parity for all six recipient-bound builders against
+the kron reference (fractional, full-UTXO, dual-sided, both single-sided removes, and the zero-payout
+burn), both-sides-throw checks for recipient-redirect attempts (a witness pointing at a covenant input),
+reference-independent invariants for the two pinned KAS legs, and **padded-carrier fixtures** — every
+pre-existing fixture fed a carrier worth ≤ dust, where `continuationValue(dust, input) === dust`, so a
+builder regressed to emitting the bare constant stayed byte-identical and passed; the new fixtures feed a
+padded carrier and pin the continuation to the input. It also runs the **discriminator hydration end to
+end**: the real backend template compiler's echo through `client.shapeCpTemplates`, asserting all flags
+true on the current schema and false on a pre-round-2 archived pin, then byte-parity of builds on the
+echo-shaped templates — so a backend field rename can no longer silently revert every integrator to the
+legacy ABI. New unit tests (no private toolchain needed) cover the build guards, the HLK-L07 quote
+contract, and the `shapeCpTemplates` flag mapping.
+
+### Docs
+
+- README: new version-floor entry (≤ 0.17.2 speaks only the legacy ABI — new-schema trades bounce), a
+  fourth integrator rule (hydrate ABI flags with `client.shapeCpTemplates`), and Quickstart template
+  guidance now routes through `cp-template` + `shapeCpTemplates` instead of raw `redeemScriptHex` reads.
+- `docs/BUILDING-TRADES.md`: new *Recipient-bound schemas* section; the `cp-template` response shape
+  corrected (`{ token, pool, curve, params }` with a single top-level params echo) and pointed at the
+  shaping helper.
+- `docs/INTEGRATION.md`: corrected the per-input compute budgets — the doc still said the pre-right-sizing
+  ≈ 500 (token) / ≈ 2000 (covenant); the actual constants are `TOKEN_COMPUTE = 100` /
+  `COVENANT_COMPUTE = 400` (`FUNDING_COMPUTE = 10`), as `verify:parity` enforces. Trade recipes now
+  reference the template-shaping step.
+
 ## 0.17.2
 
 ### Added — `WalletAdapter.signingGate` (optional)

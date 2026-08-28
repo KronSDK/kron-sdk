@@ -62,7 +62,14 @@ export type CpParams = {
 /** The dev-fund leg baked into this template, or null for old-ABI (two-fee) tokens. */
 const devFundLeg = (p: CpParams): { owner: Uint8Array; bps: bigint } | null =>
   p.devFundOwner && p.devFundBps != null ? { owner: p.devFundOwner, bps: p.devFundBps } : null;
-export type CpTemplate = { script: Uint8Array; stateStart: number; params: CpParams };
+export type CpTemplate = {
+  script: Uint8Array; stateStart: number; params: CpParams;
+  // Dual-ABI (HLK-L04): true ⇒ buy/sell take two appended witness args (recipientWitness, recipientIdentifier)
+  // and bind the buyer/change output owner to a co-signed P2PK input. Absent/false ⇒ legacy 4-arg form. The
+  // cp-template response echoes it as `tradeRecipientBound` — see `client.shapeCpTemplates`. NEVER default it
+  // true: pushing the extra args on a legacy schema corrupts the covenant's arg stack.
+  recipientBound?: boolean;
+};
 export type CpCurveState = { graduated: boolean; tokenCovid: Uint8Array; tokenReserve: bigint };
 /** The live curve UTXO. `realKas` (sompi) = its value = KAS raised. */
 export type CpCurveUtxo = { transactionId: string; index: number; realKas: bigint; state: CpCurveState };
@@ -102,18 +109,22 @@ export function p2pkSpk(k: K, pubkey: Uint8Array): Spk {
 }
 
 // --- curve-input signature scripts -------------------------------------------------------------
-function buySig(k: K, redeem: Uint8Array, kasIn: bigint, tokenOut: bigint, inventoryOut: Kcc20State, buyerOut: Kcc20State): string {
+function buySig(k: K, tpl: CpTemplate, redeem: Uint8Array, kasIn: bigint, tokenOut: bigint, inventoryOut: Kcc20State, buyerOut: Kcc20State, buyerWitness: number, buyerIdentifier: Uint8Array): string {
   const b = new SigScriptBuilder(k).int(kasIn).int(tokenOut);
   pushKcc20StateScalar(b, inventoryOut);
   pushKcc20StateScalar(b, buyerOut);
+  // HLK-L04: recipient-bound schemas take (buyerWitness, buyerIdentifier); pushing them on a legacy schema
+  // would corrupt the arg stack, so gate on the discriminator.
+  if (tpl.recipientBound) b.int(BigInt(buyerWitness)).data(buyerIdentifier);
   return b.selector(SELECTOR.buy).redeem(redeem).drain();
 }
 // single-token sell: pushes traderChangeOut too (even on a full sell — the covenant only validates it when a
 // 2nd covid-A output exists; otherwise it's an ignored placeholder).
-function sellSig(k: K, redeem: Uint8Array, tokenIn: bigint, kasOut: bigint, inventoryOut: Kcc20State, traderChangeOut: Kcc20State): string {
+function sellSig(k: K, tpl: CpTemplate, redeem: Uint8Array, tokenIn: bigint, kasOut: bigint, inventoryOut: Kcc20State, traderChangeOut: Kcc20State, sellerWitness: number, sellerIdentifier: Uint8Array): string {
   const b = new SigScriptBuilder(k).int(tokenIn).int(kasOut);
   pushKcc20StateScalar(b, inventoryOut);
   pushKcc20StateScalar(b, traderChangeOut);
+  if (tpl.recipientBound) b.int(BigInt(sellerWitness)).data(sellerIdentifier);   // HLK-L04 — see buySig
   return b.selector(SELECTOR.sell).redeem(redeem).drain();
 }
 // graduate: the PoolState struct has five fields (kasReserve, tokenReserve, tokenCovid, totalShares, lpCovid)
@@ -148,6 +159,12 @@ export function buildCpBuy(
   // Merge tokens are presence-owned: their kcc20 witness MUST be a co-present signed P2PK funding input.
   // Input 0 is the curve covenant (no signature), so the default 0 would fail the on-chain presence check.
   if (mergeTokens.length > 0 && presenceWitnessIdx === 0) throw new Error('presenceWitnessIdx must be set to a co-present signed P2PK funding input when mergeTokens is non-empty (input 0 is the curve covenant and carries no signature)');
+  // HLK-L04: on a recipient-bound schema the covenant demands the buyer co-sign a P2PK input carrying the
+  // buyerOut key. Inputs [0]=curve, [1]=inventory, [2..]=merged tokens are all covenant inputs, so a witness
+  // pointing at any of them is a stale caller — fail at build time instead of a VM rejection.
+  if (tpl.recipientBound && presenceWitnessIdx < 2 + mergeTokens.length) {
+    throw new Error('recipient-bound schema: presenceWitnessIdx must point at the buyer\'s own P2PK funding input (HLK-L04)');
+  }
   const dust = opts.tokenDust ?? COVENANT_DUST;
   const curveCovidHex = hexOf(curveCovid);
   const tokenCovidHex = hexOf(utxo.state.tokenCovid);
@@ -173,7 +190,7 @@ export function buildCpBuy(
   const newStates = [inventoryOut, buyerOut];
 
   const inputs: CovInput[] = [
-    { transactionId: utxo.transactionId, index: utxo.index, value: utxo.realKas, scriptPublicKey: cpSpk(k, curRedeem), signatureScript: buySig(k, curRedeem, kasIn, tokenOut, inventoryOut, buyerOut), redeem: curRedeem, role: 'curve' },
+    { transactionId: utxo.transactionId, index: utxo.index, value: utxo.realKas, scriptPublicKey: cpSpk(k, curRedeem), signatureScript: buySig(k, tpl, curRedeem, kasIn, tokenOut, inventoryOut, buyerOut, presenceWitnessIdx, buyerPubkey), redeem: curRedeem, role: 'curve' },
     // inventory (covid A, C-owned) spent via kcc20 transfer; the C-owned input is authorized by the curve (input 0)
     { transactionId: inventory.transactionId, index: inventory.index, value: inventory.value, scriptPublicKey: kcc20Spk(k, invRedeem), signatureScript: transferSigScript(k, invRedeem, newStates, witnesses), redeem: invRedeem, role: 'inventory' },
     ...mergeTokens.map((mt) => {
@@ -215,8 +232,14 @@ export function buildCpSell(
   if (utxo.state.graduated) throw new Error('curve has graduated — sells are locked');
   if (sellerTokens.length < 1) throw new Error('need at least one seller token');
   if (tokenIn <= 0n) throw new Error('tokenIn must be positive');
-  if (kasOut <= 0n || kasOut % SCALE !== 0n || kasOut > utxo.realKas) throw new Error('invalid kasOut');
+  // HLK-L05: a full drain (kasOut == realKas) would emit a zero-value curve output, which Kaspa consensus
+  // rejects (TxOutZero) on EVERY schema — so the `>=` guard is unconditional, not schema-gated.
+  if (kasOut <= 0n || kasOut % SCALE !== 0n || kasOut >= utxo.realKas) throw new Error('invalid kasOut — must leave at least 0.01 KAS in the curve');
   if (inventory.amount !== utxo.state.tokenReserve) throw new Error('inventory.amount must equal the curve\'s committed tokenReserve');
+  // HLK-L04: see buildCpBuy — inputs [0]=curve, [1]=inventory, [2..]=seller tokens are all covenant inputs.
+  if (tpl.recipientBound && presenceWitnessIdx < 2 + sellerTokens.length) {
+    throw new Error('recipient-bound schema: presenceWitnessIdx must point at the seller\'s own P2PK funding input (HLK-L04)');
+  }
   const dust = opts.tokenDust ?? COVENANT_DUST;
   const curveCovidHex = hexOf(curveCovid);
   const tokenCovidHex = hexOf(utxo.state.tokenCovid);
@@ -241,7 +264,7 @@ export function buildCpSell(
   const newStates = hasChange ? [inventoryOut, traderChangeOut] : [inventoryOut];
 
   const inputs: CovInput[] = [
-    { transactionId: utxo.transactionId, index: utxo.index, value: utxo.realKas, scriptPublicKey: cpSpk(k, curRedeem), signatureScript: sellSig(k, curRedeem, tokenIn, kasOut, inventoryOut, traderChangeOut), redeem: curRedeem, role: 'curve' },
+    { transactionId: utxo.transactionId, index: utxo.index, value: utxo.realKas, scriptPublicKey: cpSpk(k, curRedeem), signatureScript: sellSig(k, tpl, curRedeem, tokenIn, kasOut, inventoryOut, traderChangeOut, presenceWitnessIdx, traderPubkey), redeem: curRedeem, role: 'curve' },
     { transactionId: inventory.transactionId, index: inventory.index, value: inventory.value, scriptPublicKey: kcc20Spk(k, invRedeem), signatureScript: transferSigScript(k, invRedeem, newStates, witnesses), redeem: invRedeem, role: 'inventory' },
     ...sellerTokens.map((st) => {
       const r = materializeKcc20Script(tokenTpl, st.state);

@@ -65,8 +65,16 @@ const hexOf = (u8: Uint8Array): string => Array.from(u8, (b) => b.toString(16).p
  *  pool's complete L inventory alongside a holder's shares in removeLiquidity (REMOVE_POOL_LP_IN /
  *  REMOVE_HOLDER_LP_IN) — from a handful of pre-restructure ARCHIVED templates that returned only the holder's
  *  dShares. Read it off the compiled template's params (the KRON registry's `/api/native/cp-template` response
- *  echoes it as `canonicalLpInventory`); every live pool as of this SDK's release requires it. */
-export type PoolCpTemplate = { script: Uint8Array; stateStart: number; canonicalInventoryRequired?: boolean };
+ *  echoes it as `canonicalLpInventory`); every live pool as of this SDK's release requires it.
+ *  `zeroRemoveAllowed` (HLK-L07): true ⇒ this schema accepts a both-sides-zero redemption (shares burn to the
+ *  L inventory); absent/false ⇒ legacy schema, where the covenant rejects it and the quote must keep throwing.
+ *  `recipientBound` (HLK-L12): true ⇒ every value-releasing entrypoint takes an appended (witness, identifier)
+ *  pair binding the presence-owned outputs — and the KAS legs — to a co-signing recipient; absent/false ⇒
+ *  legacy 4/6-arg ABI (archived schemas), no extra pushes. The cp-template response echoes it as
+ *  `poolRecipientBound` — see `client.shapeCpTemplates`. NEVER default either flag to true: an absent
+ *  discriminator means the legacy ABI, and appending the extra pushes on a legacy schema corrupts the
+ *  covenant's arg stack. */
+export type PoolCpTemplate = { script: Uint8Array; stateStart: number; canonicalInventoryRequired?: boolean; zeroRemoveAllowed?: boolean; recipientBound?: boolean };
 
 /** Pool state: KAS reserve (SCALE units; pool UTXO value == kasReserve·SCALE), token reserve, the token
  *  covid A, issued LP shares, and the LP-share token covid L (ZERO until bindLp). */
@@ -263,7 +271,9 @@ export function quoteAddLiquidity(state: PoolCpState, dKas: bigint): AddLiquidit
  *  stranded by an asymmetric reserve. This was previously the MAX of the two per-side thresholds — requiring
  *  BOTH sides to round positive — which rejected withdrawals the covenant would have accepted whenever the
  *  reserves were asymmetric enough that one side's threshold was much larger than the other's. No exact-
- *  integer "step" exists (the old lcm-step that could strand a voluntary LP is gone). */
+ *  integer "step" exists (the old lcm-step that could strand a voluntary LP is gone).
+ *  On zeroRemoveAllowed schemas (HLK-L07) values below this are still LEGAL to redeem (zero payout, shares
+ *  burn to inventory) — this is then a payout threshold, no longer a legality floor. */
 export function removeMinDShares(state: PoolCpState): bigint {
   const ceilDiv = (a: bigint, b: bigint) => (a + b - 1n) / b;
   const minKas = ceilDiv(state.totalShares, state.kasReserve);
@@ -272,9 +282,12 @@ export function removeMinDShares(state: PoolCpState): bigint {
 }
 
 /** Clamp a desired `dShares` to a withdrawable amount: returns it unchanged if ≥ the minimum (see removeMinDShares),
- *  else 0 (too small to round to ≥ 1 of either side). No down-stepping — every value at/above the min is valid. */
-export function snapRemoveDShares(state: PoolCpState, desiredDShares: bigint): bigint {
-  if (desiredDShares <= 0n || desiredDShares < removeMinDShares(state)) return 0n;
+ *  else 0 (too small to round to ≥ 1 of either side). No down-stepping — every value at/above the min is valid.
+ *  With `allowZeroPayout` (HLK-L07 schemas — pass `tpl.zeroRemoveAllowed`) any positive value passes through —
+ *  a zero-payout burn is legal. */
+export function snapRemoveDShares(state: PoolCpState, desiredDShares: bigint, opts: { allowZeroPayout?: boolean } = {}): bigint {
+  if (desiredDShares <= 0n) return 0n;
+  if (!opts.allowZeroPayout && desiredDShares < removeMinDShares(state)) return 0n;
   return desiredDShares;
 }
 
@@ -287,23 +300,27 @@ export function snapRemoveDShares(state: PoolCpState, desiredDShares: bigint): b
  *  (`buildRemoveLiquidity` omits it). Rejecting a single-sided-zero withdrawal here refused transactions
  *  the covenant would have accepted, on any pool whose reserves were asymmetric enough to floor one side to
  *  zero at a `dShares` where the other side was still positive. */
-export function quoteRemoveLiquidity(state: PoolCpState, p: Pick<PoolCpParams, 'lockedShares'>, dShares: bigint): RemoveLiquidityQuote {
+export function quoteRemoveLiquidity(state: PoolCpState, p: Pick<PoolCpParams, 'lockedShares'>, dShares: bigint, opts: { allowZeroPayout?: boolean } = {}): RemoveLiquidityQuote {
   if (dShares <= 0n) throw new Error('dShares must be positive');
   if (state.totalShares - dShares < p.lockedShares) throw new Error('removal would dip below the permanently-locked floor');
   const dKas = (state.kasReserve * dShares) / state.totalShares;     // bigint division floors (positives)
   const dToken = (state.tokenReserve * dShares) / state.totalShares;
-  if (dKas === 0n && dToken === 0n) throw new Error('withdrawal too small: both payout sides round to zero');
+  // HLK-L07: on fix-schema pools a both-sides-zero redemption is legal (shares burn to the L inventory), so
+  // only legacy-schema callers keep the conservative throw. Callers pass tpl.zeroRemoveAllowed here.
+  if (dKas === 0n && dToken === 0n && !opts.allowZeroPayout) throw new Error('withdrawal too small: both payout sides round to zero');
   return { dShares, dKas, dToken, newKas: state.kasReserve - dKas, newToken: state.tokenReserve - dToken, newShares: state.totalShares - dShares };
 }
 
-function addLiquiditySig(k: K, redeem: Uint8Array, dKas: bigint, dToken: bigint, dShares: bigint, poolTokenOut: Kcc20State, poolLpOut: Kcc20State, lpSharesOut: Kcc20State): string {
+function addLiquiditySig(k: K, redeem: Uint8Array, dKas: bigint, dToken: bigint, dShares: bigint, poolTokenOut: Kcc20State, poolLpOut: Kcc20State, lpSharesOut: Kcc20State, recipient?: { witness: number; pubkey: Uint8Array }): string {
   const b = new SigScriptBuilder(k).int(dKas).int(dToken).int(dShares);
   pushKcc20StateScalar(b, poolTokenOut); pushKcc20StateScalar(b, poolLpOut); pushKcc20StateScalar(b, lpSharesOut);
+  if (recipient) b.int(BigInt(recipient.witness)).data(recipient.pubkey);   // HLK-L12: (lpWitness, lpIdentifier)
   return b.selector(POOL_CP_SELECTOR.addLiquidity).redeem(redeem).drain();
 }
-function removeLiquiditySig(k: K, redeem: Uint8Array, dShares: bigint, dKas: bigint, dToken: bigint, poolTokenOut: Kcc20State, lpTokenOut: Kcc20State, poolLpOut: Kcc20State): string {
+function removeLiquiditySig(k: K, redeem: Uint8Array, dShares: bigint, dKas: bigint, dToken: bigint, poolTokenOut: Kcc20State, lpTokenOut: Kcc20State, poolLpOut: Kcc20State, recipient?: { witness: number; pubkey: Uint8Array }): string {
   const b = new SigScriptBuilder(k).int(dShares).int(dKas).int(dToken);
   pushKcc20StateScalar(b, poolTokenOut); pushKcc20StateScalar(b, lpTokenOut); pushKcc20StateScalar(b, poolLpOut);
+  if (recipient) b.int(BigInt(recipient.witness)).data(recipient.pubkey);   // HLK-L12: (lpWitness, lpIdentifier)
   return b.selector(POOL_CP_SELECTOR.removeLiquidity).redeem(redeem).drain();
 }
 
@@ -344,13 +361,20 @@ export function buildAddLiquidity(
     throw new Error(`Refusing to build addLiquidity: pool LP-bind integrity is ${opts?.lpBindVerified === false ? 'FAILED (counterfeit shares could drain your deposit)' : 'UNVERIFIED'}. Await IndexerClient.assertLpBindSafe(tick), then pass the fetched verdict as opts.lpBindVerified.`);
   }
   if (lpDepositToken.state.amount !== q.dToken) throw new Error('LP deposit token UTXO must equal dToken exactly (split first)');
+  // HLK-L12: on a recipient-bound schema the covenant proves tx.inputs[lpWitness] is the LP's own P2PK — a
+  // witness pointing at a covenant input (0..3) can never satisfy it, so refuse to build one.
+  if (tpl.recipientBound && presenceWitnessIdx < 4) throw new Error('addLiquidity on a recipient-bound schema needs presenceWitnessIdx >= 4 (past the covenant inputs)');
   const dust = opts.tokenDust ?? COVENANT_DUST;
   const { kasReserve, tokenReserve, tokenCovid, lpCovid } = utxo.state;
+  if (tpl.canonicalInventoryRequired && lpInventory.amount !== MAX_SHARES - utxo.state.totalShares) {
+    throw new Error('pool LP inventory must equal MAX_SHARES - totalShares');
+  }
   const poolCovidHex = hexOf(poolCovid);
   const tokenCovidHex = hexOf(tokenCovid);
   const lpCovidHex = hexOf(lpCovid);
   const poolTokenOut = covenantIdOwned(poolCovid, q.newToken, false);          // grown token-A reserve (P)
-  const poolLpOut = covenantIdOwned(poolCovid, lpInventory.amount - q.dShares, false); // reduced L inventory (P)
+  const poolLpOut = covenantIdOwned(poolCovid,
+    tpl.canonicalInventoryRequired ? MAX_SHARES - q.newShares : lpInventory.amount - q.dShares, false); // reduced L inventory (P)
   const lpSharesOut = addressPresenceOwned(lpPubkey, q.dShares);               // the LP's new shares (presence)
 
   const curRedeem = materializePoolCpScript(tpl, utxo.state);
@@ -367,7 +391,7 @@ export function buildAddLiquidity(
   const lWitnesses = [0];
 
   const inputs: CovInput[] = [
-    { transactionId: utxo.transactionId, index: utxo.index, value: kasReserve * SCALE, scriptPublicKey: poolCpSpk(k, curRedeem), signatureScript: addLiquiditySig(k, curRedeem, q.dKas, q.dToken, q.dShares, poolTokenOut, poolLpOut, lpSharesOut), redeem: curRedeem, role: 'pool' },
+    { transactionId: utxo.transactionId, index: utxo.index, value: kasReserve * SCALE, scriptPublicKey: poolCpSpk(k, curRedeem), signatureScript: addLiquiditySig(k, curRedeem, q.dKas, q.dToken, q.dShares, poolTokenOut, poolLpOut, lpSharesOut, tpl.recipientBound ? { witness: presenceWitnessIdx, pubkey: lpPubkey } : undefined), redeem: curRedeem, role: 'pool' },
     { transactionId: lpDepositToken.transactionId, index: lpDepositToken.index, value: lpDepositToken.value, scriptPublicKey: kcc20Spk(k, lpDepositRedeem), signatureScript: transferSigScript(k, lpDepositRedeem, aStates, aWitnesses), redeem: lpDepositRedeem, role: 'lpDeposit' },
     { transactionId: utxo.tokenUtxo.transactionId, index: utxo.tokenUtxo.index, value: utxo.tokenUtxo.value, scriptPublicKey: kcc20Spk(k, poolAResRedeem), signatureScript: transferSigScript(k, poolAResRedeem, aStates, aWitnesses), redeem: poolAResRedeem, role: 'poolToken' },
     { transactionId: lpInventory.transactionId, index: lpInventory.index, value: lpInventory.value, scriptPublicKey: kcc20Spk(k, poolLpInvRedeem), signatureScript: transferSigScript(k, poolLpInvRedeem, lStates, lWitnesses), redeem: poolLpInvRedeem, role: 'poolLpInventory' },
@@ -395,10 +419,15 @@ export function buildAddLiquidity(
  * from the same lookup `buildAddLiquidity` already needs) whenever `tpl.canonicalInventoryRequired` is true —
  * which is every schema this SDK version knows how to compile.
  *
+ * On a recipient-bound schema (HLK-L12) the withdrawn dKas·SCALE is additionally an explicit output PINNED to
+ * the LP's P2PK (it used to be builder-chosen tx change): the KAS leg follows the reserve (REMOVE_KAS_OUT=2)
+ * so output 1 stays the reserve — the indexer's pool-pointer derivation is reserve.index−1. The `dKas == 0`
+ * zero-payout case (HLK-L07 burn included) has no KAS leg and keeps the legacy layout.
+ *
  * CANONICAL (current — REQUIRED for every live pool):
  *   Inputs:  [0]=pool [1]=pool token-A reserve(P) [2]=pool L inventory(P, complete) [3]=LP L shares(presence, =dShares)
- *   Outputs: [0]=pool(shrunk) [1]=pool token-A reserve(P, newToken) [2]=OPTIONAL LP withdrawn token(presence, dToken)
- *            [3]=consolidated L inventory(P, MAX_SHARES − newShares)
+ *   Outputs: [0]=pool(shrunk) [1]=pool token-A reserve(P, newToken) [2]=KAS→LP(P2PK, recipientBound && dKas>0 only)
+ *            [.]=OPTIONAL LP withdrawn token(presence, dToken) [.]=consolidated L inventory(P, MAX_SHARES − newShares)
  * ARCHIVED (a handful of pre-restructure pinned templates only):
  *   Inputs:  [0]=pool [1]=pool token-A reserve(P) [2]=LP L shares(presence, =dShares)
  *   Outputs: [0]=pool(shrunk) [1]=pool token-A reserve(P, newToken) [2]=OPTIONAL LP withdrawn token(presence, dToken)
@@ -414,12 +443,15 @@ export function buildRemoveLiquidity(
   opts: { tokenDust?: bigint; lpInventory?: PoolLpInventoryUtxo } = {},
 ): CovenantSpend {
   if (lpShares.state.amount !== q.dShares) throw new Error('LP shares UTXO must equal dShares exactly (split first)');
+  const canonical = !!tpl.canonicalInventoryRequired;
+  // HLK-L12: on a recipient-bound schema the covenant proves tx.inputs[lpWitness] is the LP's own P2PK — a
+  // witness pointing at a covenant input can never satisfy it, so refuse to build one.
+  if (tpl.recipientBound && presenceWitnessIdx < (canonical ? 4 : 3)) throw new Error('removeLiquidity on a recipient-bound schema needs presenceWitnessIdx past the covenant inputs');
   const dust = opts.tokenDust ?? COVENANT_DUST;
   const { kasReserve, tokenReserve, tokenCovid, lpCovid } = utxo.state;
   const poolCovidHex = hexOf(poolCovid);
   const tokenCovidHex = hexOf(tokenCovid);
   const lpCovidHex = hexOf(lpCovid);
-  const canonical = !!tpl.canonicalInventoryRequired;
   const lpInventory = opts.lpInventory;
   if (canonical && (!lpInventory || lpInventory.amount !== MAX_SHARES - utxo.state.totalShares)) {
     throw new Error('removeLiquidity requires the canonical pool LP inventory (pass opts.lpInventory equal to MAX_SHARES - totalShares)');
@@ -446,7 +478,7 @@ export function buildRemoveLiquidity(
   const lWitnesses = canonical ? [0, presenceWitnessIdx] : [presenceWitnessIdx];
 
   const inputs: CovInput[] = [
-    { transactionId: utxo.transactionId, index: utxo.index, value: kasReserve * SCALE, scriptPublicKey: poolCpSpk(k, curRedeem), signatureScript: removeLiquiditySig(k, curRedeem, q.dShares, q.dKas, q.dToken, poolTokenOut, lpTokenOut, poolLpOut), redeem: curRedeem, role: 'pool' },
+    { transactionId: utxo.transactionId, index: utxo.index, value: kasReserve * SCALE, scriptPublicKey: poolCpSpk(k, curRedeem), signatureScript: removeLiquiditySig(k, curRedeem, q.dShares, q.dKas, q.dToken, poolTokenOut, lpTokenOut, poolLpOut, tpl.recipientBound ? { witness: presenceWitnessIdx, pubkey: lpPubkey } : undefined), redeem: curRedeem, role: 'pool' },
     { transactionId: utxo.tokenUtxo.transactionId, index: utxo.tokenUtxo.index, value: utxo.tokenUtxo.value, scriptPublicKey: kcc20Spk(k, poolAResRedeem), signatureScript: transferSigScript(k, poolAResRedeem, aStates, aWitnesses), redeem: poolAResRedeem, role: 'poolToken' },
     ...(canonical ? [{ transactionId: lpInventory!.transactionId, index: lpInventory!.index, value: lpInventory!.value, scriptPublicKey: kcc20Spk(k, poolLpInvRedeem!), signatureScript: transferSigScript(k, poolLpInvRedeem!, lStates, lWitnesses), redeem: poolLpInvRedeem!, role: 'poolLpInventory' as const }] : []),
     { transactionId: lpShares.transactionId, index: lpShares.index, value: lpShares.value, scriptPublicKey: kcc20Spk(k, lpSharesRedeem), signatureScript: transferSigScript(k, lpSharesRedeem, lStates, lWitnesses), redeem: lpSharesRedeem, role: 'lpShares' },
@@ -454,6 +486,11 @@ export function buildRemoveLiquidity(
   const outputs: CovOutput[] = [
     { value: q.newKas * SCALE, scriptPublicKey: poolCpSpk(k, newRedeem), role: 'pool', binding: { covid: poolCovidHex, authorizingInput: 0 } },
     { value: continuationValue(dust, utxo.tokenUtxo.value), scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolTokenOut)), role: 'poolToken', binding: { covid: tokenCovidHex, authorizingInput: 1 } },
+    // HLK-L12: the withdrawn KAS is an explicit output pinned to the LP at REMOVE_KAS_OUT=2 — AFTER the reserve
+    // (output 1), so the reserve's index is unchanged and the indexer's reserve.index−1 pool pointer stays
+    // correct (dKas>0 only — the HLK-L07 zero-payout burn has no KAS leg and keeps the legacy layout). Plain
+    // P2PK, no covenant binding (like the fee legs).
+    ...(tpl.recipientBound && q.dKas > 0n ? [{ value: q.dKas * SCALE, scriptPublicKey: p2pkSpk(k, lpPubkey), role: 'lpKas' as const }] : []),
     ...(q.dToken > 0n ? [{ value: dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, lpTokenOut)), role: 'lpToken' as const, binding: { covid: tokenCovidHex, authorizingInput: 1 } }] : []),
     { value: canonical ? continuationValue(dust, lpInventory!.value) : dust, scriptPublicKey: kcc20Spk(k, materializeKcc20Script(tokenTpl, poolLpOut)), role: 'poolLpInventory', binding: { covid: lpCovidHex, authorizingInput: 2 } },
   ];
