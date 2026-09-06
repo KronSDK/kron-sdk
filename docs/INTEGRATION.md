@@ -309,15 +309,14 @@ extension, web app, explorer frontend) can call directly:
 |---|---|---|
 | `idx.kron.technology` (all `/v1/kcc20/*` reads + SSE) | `*` — open | The integrator read plane; built for this. |
 | `api.…/api/registry/tokenlist`, `api.…/api/registry/token/{covid}/descriptor` | `*` — open | The two registry reads designed for third parties. |
-| everything else on `api.kron.technology` — **including `POST /api/native/cp-template`** | locked | Not a session/mutation rule: the two rows above are an explicit allowlist, and *every* other route is locked whether or not it takes auth. `cp-template` takes none and shares the descriptors' compile pool, and is locked all the same. |
+| `api.…/api/native/cp-template` | `*` — open | Covenant templates. A pure deterministic compile — no session, no auth, no stored state — so it is allowlisted for browser callers like the two rows above. Compile-rate-limited per IP. |
+| everything else on `api.kron.technology` | locked | Not a session/mutation rule: the rows above are an explicit allowlist, and *every* other route is locked whether or not it takes auth. |
 | `seq.kron.technology` | locked | Server-side only today. If you're building **browser-side trading** and need the sequencer from a page context, contact us — this is a deliberate policy, not an oversight. |
 
-**What the `cp-template` lock means in practice.** It answers
-`access-control-allow-origin: https://kron.technology`, so an ordinary web page can't call it — and
-neither can an **MV3 content script**, which is subject to the page's CORS. An **MV3
-background/service-worker** fetch with the host in `host_permissions` is *not* blocked, and neither is
-any server-side/Node call. If you need templates from a page context, route the request through your own
-proxy: `fetchCpTemplates` takes `baseUrl` and `fetchImpl` for exactly that.
+**Calling `cp-template` from a browser.** It answers `access-control-allow-origin: *` on every response,
+errors included, so a web page, an MV3 content script, an MV3 background/service-worker and a server-side
+call all work the same way. `fetchCpTemplates` still accepts `baseUrl` and `fetchImpl` if you prefer to
+route through your own backend — for shared caching, say, since templates are static per token.
 
 Rate limits (subject to tuning; all responses are per-IP):
 

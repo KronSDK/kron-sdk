@@ -3,6 +3,45 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.18.2
+
+### Docs — no code changes
+
+A full audit of the integration docs after 0.18.1, prompted by the realisation that stale guidance was a
+contributing cause of the `pick at an invalid location` incident: several places still taught the very path
+that produces an unhydrated template. No behaviour, API or transaction bytes change — `verify:parity` is
+byte-identical. Republished so the corrected README and JSDoc reach npm consumers, not just GitHub.
+
+- **Template acquisition.** Four places still said to build a template from a UTXO's `redeemScriptHex`.
+  That is right for **kcc20** templates (`decodeKcc20Redeem`) and wrong for **curve / pool / vesting**,
+  which additionally need the baked `params` — and whose ABI discriminators cannot be recovered from the
+  compiled bytes at all. Corrected in README (twice, both shipped), `src/native/curveCpTx.ts` and
+  `src/index.ts`, and in `docs/INTEGRATION.md`.
+- **Two recipient-bound schemas, not one.** The docs described `bdbcfb2540d1…` as *the* recipient-bound
+  schema. `4de67d8649eb…` is also recipient-bound — on the **curve only** (`tradeRecipientBound = 1`,
+  `poolRecipientBound = 0`) — and it is the **older** of the two, so the ABI is not a function of schema
+  age and the two flags resolve independently. `docs/BUILDING-TRADES.md` now attributes HLK-L04 to both and
+  HLK-L12 (with the pinned KAS legs at outputs 4 and 2) to round 2 alone: appending the recipient pair to a
+  pool builder on a round-1 pin is the same class of failure in the opposite direction.
+- **Legacy pool arity was wrong in shipped JSDoc.** `PoolCpTemplate.recipientBound` said "legacy 4/6-arg
+  ABI (archived schemas)". The legacy pool declares **4/3/6/6** args in declaration order
+  (`swapKasForToken` / `swapTokenForKas` / `addLiquidity` / `removeLiquidity`), `bindLp` takes 1 under both
+  ABIs, and those schemas are not archived — they are what the great majority of live tokens run, so an
+  absent flag is the *correct* resolution for them.
+- **The witness bound is documented.** `MAX_WITNESS_IDX` and the `[0, 127]` range (127, not 255, because
+  `0x80..0xff` decode as negative script numbers) had zero prose mentions anywhere. Now in README and
+  `docs/INTEGRATING-KCC20-UTXOS.md`.
+- **`cp-template` is now CORS-open.** It was locked to `https://kron.technology`, which blocked browser
+  pages and MV3 content scripts from resolving a token's covenant ABI at all — while never blocking curl,
+  so the lock bought nothing and only forced integrators to stand up a proxy. As of 2026-09-06 it answers
+  `*` on every response, errors included, and stays compile-rate-limited per IP. `fetchCpTemplates` still
+  takes `fetchImpl` / `baseUrl` if you would rather route through your own backend. The CORS table in
+  `docs/INTEGRATION.md` also described the old lock by the wrong criterion, and is corrected.
+- Warning cadence corrected to **once per builder** (up to six lines), not once per process;
+  `KRON_SDK_SILENCE_ABI_WARNINGS`, the `shapeCpTemplates` throw, and the explicit `recipientBound: false`
+  convention are all documented; `scripts/e2e-offline-flow.mjs` now sets that flag explicitly, so the one
+  runnable sample no longer models a flagless template.
+
 ## 0.18.1
 
 ### Fixed — an unhydrated template no longer builds the wrong ABI in silence

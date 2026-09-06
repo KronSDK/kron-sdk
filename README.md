@@ -4,7 +4,7 @@
 — a bonding-curve launchpad + AMM DEX — from any JS/TS environment.** Browser or Node. No custody, ever:
 this package only *builds* transactions; a wallet (yours, or your user's) signs them.
 
-> **Status: v0.18.1, mainnet.** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.18.2, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract (which is
 > [KIP-12](https://github.com/kaspanet/kips/pull/44)) and how to adapt it to a specific wallet's injected
@@ -62,11 +62,9 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 >   `zeroRemoveAllowed`, `canonicalInventoryRequired`). Hand-shape the response and miss a flag and you build
 >   legacy-ABI transactions that recipient-bound tokens reject at submit with `pick at an invalid location`.
 >   A version bump alone is not enough — `recipientBound` did not exist before 0.18.0, so template code
->   carried over from 0.17.x is necessarily flagless. Note the endpoint's CORS allow-list is
->   `https://kron.technology` only, so an ordinary browser page — and an MV3 **content** script — cannot call
->   `cp-template` directly and must proxy it (a Node/server-side call, or an MV3 background/service-worker
->   fetch with `host_permissions`, is unaffected); `fetchCpTemplates` takes `fetchImpl` and `baseUrl` for
->   exactly that. See
+>   carried over from 0.17.x is necessarily flagless. `cp-template` answers CORS `*`, so a browser page,
+>   an extension, or a server can all call it directly; `fetchCpTemplates` still takes `fetchImpl` and
+>   `baseUrl` if you would rather route through your own backend. See
 >   [docs/BUILDING-TRADES.md § Recipient-bound schemas](docs/BUILDING-TRADES.md#recipient-bound-schemas-requires-0181).
 
 ## Why this exists
@@ -110,7 +108,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.18.1      # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.18.2      # or pin an exact version for reproducible builds
 ```
 
 The package follows semver — **just install `@latest`**; there's no reason to pin an older release. The token-list client (`client.RegistryClient.tokenlist()`) and on-chain verifier
@@ -165,8 +163,8 @@ const { curve: cpTemplate, token: tokenTemplate } = await kron.client.fetchCpTem
   // REQUIRED — pass the registry record's pin verbatim, or `null` for a pre-pinning entry. Omitting it
   // makes the backend resolve the CURRENT covenant sources instead of the token's pinned ones.
   templateVersion: entry.extensions.templateVersion ?? null,
-  // fetchImpl / baseUrl also let a browser page route this through its own proxy — the endpoint's CORS
-  // allow-list is `https://kron.technology` only (see rule 4 above).
+  // Optional: fetchImpl / baseUrl let you swap the transport (your own backend, a retrying agent, a test
+  // double). The endpoint answers CORS `*`, so calling it straight from a browser is fine.
 });
 //
 //    Any witness index you pass a builder must be an integer in [0, 127] (`kron.kcc20.MAX_WITNESS_IDX`) —
