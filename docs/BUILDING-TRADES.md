@@ -55,6 +55,10 @@ decodes the script hex AND hydrates the per-token covenant-ABI discriminators fr
 echo (`tradeRecipientBound`, `poolRecipientBound`, `zeroRemoveAllowed`, `canonicalLpInventory` — see
 *Recipient-bound schemas* below). Note `params` is top-level, **not** nested per template.
 
+Since 0.18.1 `shapeCpTemplates` **throws** when the echo carries none of those four discriminators — that is
+a pre-HLK backend answering, and the templates it returns cannot be shaped into anything you should sign
+against. Point `baseUrl` at a backend that echoes them rather than catching the throw.
+
 A hand-shaped template that misses a flag builds transactions every recipient-bound token rejects, with this
 error at submit:
 
@@ -66,7 +70,11 @@ pick at an invalid location
 That is a stack-arity failure, not a signing problem: a recipient-bound schema's buy/sell takes two extra
 signature-script args, so a legacy-shaped sigscript leaves the covenant's `OP_PICK` reads pointing past the
 bottom of the stack. If you see it, log `curve.recipientBound` — `undefined` means the template was never
-hydrated. Since 0.18.1 the builders warn once per process when that flag is unset.
+hydrated. Since 0.18.1 the builders warn when that flag is unset — **once per builder, not once per
+process**, so a session that touches every path prints up to six lines (`buildCpBuy`, `buildCpSell`,
+`buildPoolV3SwapKasForToken`, `buildPoolV3SwapTokenForKas`, `buildAddLiquidity`, `buildRemoveLiquidity`).
+Set `globalThis.KRON_SDK_SILENCE_ABI_WARNINGS = true` to silence them; it is read at warn time, so you can
+flip it at any point.
 
 `curveParams`, `tokenCovid`, and `templateVersion` all come off the token's registry record. Fetch
 them with the SDK's `RegistryClient` (or `GET https://api.kron.technology` token metadata).
@@ -86,7 +94,8 @@ is what guarantees you compile the exact same script (byte-for-byte) that KRON's
 
 ## The per-trade shape (same for all flows)
 
-1. **Templates** (cached) — from `cp-template`, shaped with `client.shapeCpTemplates`, as above.
+1. **Templates** (cached) — from `client.fetchCpTemplates` (fetch + shape in one call), or from your own
+   `cp-template` POST shaped with `client.shapeCpTemplates`, as above.
 2. **Live state + the covenant UTXO** (fresh, every trade) — from the indexer
    (`https://idx.kron.technology/v1/kcc20`, or the SDK's `IndexerClient`). The covenant UTXO's address
    is derived from its current state, so it **moves after every trade** — you must re-read it:
@@ -123,36 +132,52 @@ Curve vs pool is decided by the token's graduation state — read it from the to
 > `quotePoolV3Sell` into the builder; never hand-roll `newToken` or `tokenOut`, because the covenant
 > re-derives the retention itself and rejects anything that disagrees by even one unit.
 
-## Recipient-bound schemas (the current covenant ABI) — requires ≥ 0.18.0
+## Recipient-bound schemas (requires 0.18.1+)
 
-Tokens launched under the current covenant schema (`bdbcfb2540d1…`, the Hashlock round-2 fix set) enforce a
-**recipient-bound ABI**: every value-releasing entrypoint — curve buy/sell (HLK-L04) and all four pool
-entrypoints (HLK-L12) — takes two appended witness args binding the trade's presence-owned outputs (and the
-KAS proceeds) to a P2PK input the trader/LP themselves co-sign. The two KAS-releasing pool legs additionally
-pin the proceeds as an **explicit P2PK output**: `swapTokenForKas` emits the trader's
+**Two** schemas are recipient-bound, and they differ in how far it reaches:
+
+- **`4de67d8649eb…`** — Hashlock round 1. **Curve only** (`tradeRecipientBound = 1`,
+  `poolRecipientBound = 0`): its `amm_pool_cp_v3.sil` declares all four pool entrypoints with **no** witness
+  args.
+- **`bdbcfb2540d1…`** — Hashlock round 2. **Curve *and* pool** (both flags = 1).
+
+On **both**, curve buy/sell (HLK-L04) takes two appended witness args binding the trade's presence-owned
+outputs (and the KAS proceeds) to a P2PK input the trader themselves co-signs. On **`bdbcfb2540d1…` only**,
+the same applies to all four pool entrypoints (HLK-L12), and the two KAS-releasing pool legs additionally pin
+the proceeds as an **explicit P2PK output**: `swapTokenForKas` emits the trader's
 `kasOut − rawCreatorFee − rawPlatformFee` at output 4, and `removeLiquidity` emits the LP's `dKas·SCALE` at
-output 2 (right after the reserve). An old-ABI build against a new-schema token is simply **rejected by the
-covenant** — funds never move wrong, the trade just bounces.
+output 2 (right after the reserve). An old-ABI build against a recipient-bound entrypoint is simply **rejected
+by the covenant** — funds never move wrong, the trade just bounces.
+
+The two flags resolve **independently**. Read each off the token's own params echo; never infer the pool flag
+from the curve one. Appending the pool pair against a `4de67d8649eb…` pin corrupts a legacy pool arg stack in
+exactly the way the curve pair fixes the curve.
 
 Which ABI a token speaks is decided **per token by its pinned template**, via optional flags on the template
 objects: `curveTpl.recipientBound`, `poolTpl.recipientBound`, plus `poolTpl.zeroRemoveAllowed` (HLK-L07: a
 both-sides-zero LP redemption is legal — pass it as `quoteRemoveLiquidity`'s / `snapRemoveDShares`'
 `allowZeroPayout`) and the existing `poolTpl.canonicalInventoryRequired`. Three rules:
 
-1. **Hydrate the flags with `client.shapeCpTemplates`.** It maps the `cp-template` response's params echo
-   (`tradeRecipientBound`, `poolRecipientBound`, `zeroRemoveAllowed`, `canonicalLpInventory`) onto the
-   template objects. Hand-rolling the mapping and missing a flag builds transactions every new-schema token
-   rejects. The echo reflects the **pinned schema actually compiled**, so old-pinned tokens automatically
-   resolve to their legacy ABI.
-2. **Never default a flag to true.** Absent ⇒ legacy ABI (the fail-safe direction). Appending the extra args
-   on a legacy schema corrupts the covenant's arg stack.
+1. **Hydrate the flags with `client.fetchCpTemplates`** (or `client.shapeCpTemplates`, if you own the HTTP
+   call). It maps the `cp-template` response's params echo (`tradeRecipientBound`, `poolRecipientBound`,
+   `zeroRemoveAllowed`, `canonicalLpInventory`) onto the template objects. Hand-rolling the mapping and
+   missing a flag builds transactions every recipient-bound token rejects. The echo reflects the **pinned
+   schema actually compiled**, so each token resolves to whatever ABI its own pin compiles — **not a function
+   of the pin's age**: `4de67d8649eb…` is *older* than `bdbcfb2540d1…` and is recipient-bound too.
+2. **Both directions are wrong — get the flag from the echo, don't guess it.** Defaulting a flag to *true*
+   appends the extra args on a legacy schema and corrupts the covenant's arg stack. Leaving it *unset* on a
+   recipient-bound token is guaranteed wrong the other way: the builder emits a sigscript two stack items
+   short and the node rejects with `pick at an invalid location`. Absent is correct only where the token
+   really is legacy — which, as of 2026-09-06, is **84 of the 86 live tokens**. Where you know that, say so:
+   an explicit `recipientBound: false` is a legitimate assertion of a legacy schema, and it is silent (no
+   unset-flag warning).
 3. **`presenceWitnessIdx` must point at the trader's/LP's own signed P2PK funding input**, past every
    covenant input (curve/pool, pool token, merges/seller tokens — e.g. ≥ 2 on a plain buy, ≥ 4 on
    add/removeLiquidity). On a recipient-bound schema the covenant proves that input carries the recipient's
    key, so a witness pointing at a covenant input can never validate — the builders throw at build time
    rather than hand you a VM rejection.
 
-Wallet-side accounting note: on a recipient-bound pool sell/withdraw the user's KAS arrives as the pinned
+Wallet-side accounting note: on a `bdbcfb2540d1…` pool sell/withdraw the user's KAS arrives as the pinned
 P2PK output above, **not** as builder-chosen change — the fee legs' padding (`FEE_OUT_MIN`) is funded from
 the trader's own inputs, and the tx's change output shrinks accordingly.
 

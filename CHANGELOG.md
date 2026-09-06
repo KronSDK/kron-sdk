@@ -21,8 +21,8 @@ depth into the compiled covenant as a constant and reads it with `OP_PICK`; a re
 two appended args (`witness`, `identifier`), so a legacy-arity sigscript leaves every one of those picks
 pointing past the bottom of the stack. Measured on mainnet: a legacy curve buy carries 10 flattened args
 (12 stack items with selector + redeem), a recipient-bound buy carries 12 (14 items). It hit buys and sells
-equally, on exactly the recipient-bound schemas and nothing else — tokens on legacy schemas were always
-correct, because for those an absent flag *is* the right answer.
+equally, on exactly the recipient-bound schemas (`4de67d8649eb…` and `bdbcfb2540d1…`) and nothing else —
+tokens on legacy schemas were always correct, because for those an absent flag *is* the right answer.
 
 - **Added `client.fetchCpTemplates()`** — POSTs to `/api/native/cp-template` and returns already-shaped
   templates, so the un-hydrated path stops existing. `templateVersion` is a **required** option (pass `null`
@@ -54,9 +54,10 @@ Witness indices are now validated before anything is built: each must be an inte
 error names the offending position and points at `presenceWitnessIdx`. Exported as `MAX_WITNESS_IDX`. No
 in-range behaviour changes — `verify:parity` is byte-identical.
 
-Behaviour for correctly-hydrated templates is unchanged — no assembled transaction bytes differ. The only
-breaking-ish edge is `shapeCpTemplates` against a pre-HLK backend, which now throws instead of returning
-legacy templates.
+Behaviour for correctly-hydrated templates is unchanged — no assembled transaction bytes differ. There are
+two breaking-ish edges, both of them cases 0.18.0 accepted and this release refuses: `shapeCpTemplates`
+against a pre-HLK backend now throws instead of returning legacy templates, and a witness index outside
+`[0, 127]` now throws instead of being truncated with `& 0xff` into a *different*, in-range index.
 
 > **Upgrading from 0.17.x?** A version bump alone was never sufficient: `recipientBound` did not exist before
 > 0.18.0, so any template-construction code carried across the bump is necessarily flagless. Route templates
@@ -66,13 +67,23 @@ A future **0.19.0** will make the discriminator a required field so a flagless t
 
 ## 0.18.0
 
-### Added — recipient-bound covenant ABI (HLK-L04 / HLK-L07 / HLK-L12): trade new-schema tokens
+### Added — recipient-bound covenant ABI (HLK-L04 / HLK-L07 / HLK-L12): trade recipient-bound tokens
 
 The builders now speak the current KRON covenant schema's (`bdbcfb2540d1…`, Hashlock round-2 fix set)
 recipient-bound ABI. Previously an SDK-built trade against a new-schema token was rejected by the covenant
 (it bounced — funds never moved wrong); tokens pinned to older schemas were, and remain, unaffected. All of
 it is gated on per-template discriminators — **absent flags mean the legacy ABI**, so existing integrations
 against live tokens build byte-identical transactions to 0.17.x.
+
+> **Correction (2026-09-06).** "Tokens pinned to older schemas were, and remain, unaffected" is false as
+> written, and the byte-identical claim after it is narrower than it reads. There are **two** recipient-bound
+> schemas, not one: `4de67d8649eb…` (Hashlock round 1, created 2026-08-26) is recipient-bound on the **curve
+> only** (`tradeRecipientBound=1`, `poolRecipientBound=0`), and `bdbcfb2540d1…` (round 2, created 2026-08-28)
+> is recipient-bound on **both** curve and pool. The two schemas' `curve_cp.sil` files are byte-identical, so
+> curve buy/sell against `4de67d8649eb…` take the recipient-bound arity exactly as they do on `bdbcfb2540d1…`
+> — being the older pin does not make it legacy, and the two flags resolve independently per template. The
+> byte-identical-to-0.17.x guarantee therefore covers the tokens actually on legacy schemas — 84 of 86 live
+> tokens as of 2026-09-06 — not everything that is not `bdbcfb2540d1…`.
 
 - **Curve buy/sell (HLK-L04).** `CpTemplate` gained `recipientBound`. When set, `buildCpBuy`/`buildCpSell`
   append the (recipientWitness, recipientIdentifier) pair to the curve sigscript, and require
@@ -92,7 +103,7 @@ against live tokens build byte-identical transactions to 0.17.x.
 - **`client.shapeCpTemplates`** — the one mapping from the `POST /api/native/cp-template` response's params
   echo onto the template objects, discriminators included (`tradeRecipientBound` → curve,
   `poolRecipientBound` → pool, `zeroRemoveAllowed`, `canonicalLpInventory`). Use it instead of hand-shaping
-  the response; a missed flag builds transactions every new-schema token rejects. See the new
+  the response; a missed flag builds transactions every recipient-bound token rejects. See the new
   *Recipient-bound schemas* section in `docs/BUILDING-TRADES.md`.
 
 ### Changed
@@ -115,14 +126,14 @@ pre-existing fixture fed a carrier worth ≤ dust, where `continuationValue(dust
 builder regressed to emitting the bare constant stayed byte-identical and passed; the new fixtures feed a
 padded carrier and pin the continuation to the input. It also runs the **discriminator hydration end to
 end**: the real backend template compiler's echo through `client.shapeCpTemplates`, asserting all flags
-true on the current schema and false on a pre-round-2 archived pin, then byte-parity of builds on the
+true on the current schema and false on an archived pre-recipient-bound pin (`a9b901ac9269…`), then byte-parity of builds on the
 echo-shaped templates — so a backend field rename can no longer silently revert every integrator to the
 legacy ABI. New unit tests (no private toolchain needed) cover the build guards, the HLK-L07 quote
 contract, and the `shapeCpTemplates` flag mapping.
 
 ### Docs
 
-- README: new version-floor entry (≤ 0.17.2 speaks only the legacy ABI — new-schema trades bounce), a
+- README: new version-floor entry (≤ 0.17.2 speaks only the legacy ABI — recipient-bound trades bounce), a
   fourth integrator rule (hydrate ABI flags with `client.shapeCpTemplates`), and Quickstart template
   guidance now routes through `cp-template` + `shapeCpTemplates` instead of raw `redeemScriptHex` reads.
 - `docs/BUILDING-TRADES.md`: new *Recipient-bound schemas* section; the `cp-template` response shape

@@ -82,7 +82,7 @@ export function shapeCpTemplates(t: CpTemplatesResponse): CpTemplates {
       script: hexToBytes(t.pool.scriptHex), stateStart: t.pool.stateStart,
       canonicalInventoryRequired: !!Number(p.canonicalLpInventory),
       zeroRemoveAllowed: !!Number(p.zeroRemoveAllowed),   // HLK-L07; absent ⇒ legacy throw-on-zero
-      recipientBound: !!Number(p.poolRecipientBound),     // HLK-L12; absent ⇒ legacy 4/6-arg pool ABI
+      recipientBound: !!Number(p.poolRecipientBound),     // HLK-L12; absent ⇒ legacy pool ABI (4/3/6/6 args)
     },
     curve: {
       script: hexToBytes(t.curve.scriptHex), stateStart: t.curve.stateStart,

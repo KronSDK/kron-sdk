@@ -74,6 +74,16 @@ Two places, both because the chain pins the value there, so checking it re-verif
 
 For those, pass an explicit `expectedAmount` to `selectCovenantUtxo`. For **every** KCC-20 token balance — curve inventory, pool token reserve, pool LP inventory, or a holder's own presence-owned piece — pass `null`, or just use `selectCovenantTokenUtxo`.
 
+## The witness index is capped at 127, not 255
+
+Having found the UTXO, you have to say what authorizes spending it. Each token input names the co-present signed P2PK input that stands for its owner — `presenceWitnessIdx`, encoded into the sigscript's `byte[] witnesses`. That index must be an **integer in `[0, 127]`**, exported as `kcc20.MAX_WITNESS_IDX`.
+
+The ceiling is 127 rather than 255 because the covenant reads each entry back as a script number, and the bytes `0x80..0xff` decode on chain as **negative**. An index of 128 or above cannot authorize an input on any schema — there is no version of this where the high half works.
+
+`0.18.0` and earlier truncated an out-of-range index to a single byte and said nothing, so the index you passed silently became a *different* one: `256` became `0`, which on a covenant spend points at the covenant input — an input that carries no signature at all. `0.18.1` throws at build time instead.
+
+Tell that failure apart from an ABI mismatch when you triage it. On schemas without the HLK-L11 bounds check, a truncated index surfaced as **`pick at an invalid location`** — the same node string an ABI-arity mismatch produces, from an entirely unrelated cause. Schemas carrying the check fail as `script ran, but verification failed`. So if you see `pick at an invalid location`, check the witness index you passed before you go rereading discriminator flags; the build-time throw exists to keep the two from being confused again.
+
 ## Checklist
 
 - [ ] No selector compares a KCC-20 UTXO's value to a constant.
@@ -82,3 +92,7 @@ For those, pass an explicit `expectedAmount` to `selectCovenantUtxo`. For **ever
 - [ ] Covenant-owned continuation outputs are emitted at `continuationValue(COVENANT_DUST, inputValue)`;
       every other output at plain `COVENANT_DUST`.
 - [ ] Selection fails closed on no match **and** on more than one match.
+- [ ] Every `presenceWitnessIdx` is an integer in `[0, kcc20.MAX_WITNESS_IDX]` (127, not 255) and points at
+      a signed P2PK input, never at a covenant input.
+- [ ] `pick at an invalid location` is triaged as a witness index *or* an ABI-arity mismatch before either
+      is assumed.

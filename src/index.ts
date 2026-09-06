@@ -5,8 +5,12 @@
 // automatically via this package's `exports` map).
 //
 // This package deliberately does NOT include a covenant compiler or the .sil sources — it can't compile or
-// deploy a new curve/pool/token instance. Builders here operate against a target's already-compiled script
-// bytes (read from your indexer's live UTXO data, e.g. `redeemScriptHex`), not from source. See README.
+// deploy a new curve/pool/token instance. Builders here operate against a target's already-compiled templates,
+// fetched from the KRON backend's `POST /api/native/cp-template` and shaped by `client.fetchCpTemplates()`.
+// An indexer's raw `redeemScriptHex` still yields a kcc20 template (`kcc20.decodeKcc20Redeem`), but not a
+// curve/pool/vesting one: those additionally need their params (fee owners, vKas, graduationKas, fee bps,
+// dev-fund leg — plus `stateLen` for vesting), which a redeem script does not expose, and their ABI
+// discriminators cannot be recovered from the compiled bytes. See README.
 //
 // Namespaced (not flat) on purpose: builder names like `buy`/`sell`/`transfer` are generic enough to
 // collide with consumer code at the top level.

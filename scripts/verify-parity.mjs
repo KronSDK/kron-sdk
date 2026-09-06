@@ -671,7 +671,7 @@ console.log(`\nparity: SDK dist vs kron reference builders (curve template ${cur
 // silently hydrate recipientBound=false for every integrator, building legacy-ABI transactions every
 // fix-schema covenant rejects, with every other gate green. Close that hole by running the REAL backend
 // compiler (the same module `POST /api/native/cp-template` serves) through the SDK's shaping and asserting
-// the flags — true on the current schema, false on a pre-round-2 archived pin — then feeding the shaped
+// the flags — true on the current schema, false on an archived pre-recipient-bound pin — then feeding the shaped
 // current-schema templates straight into the builders for byte-parity on production-shaped objects.
 {
   console.log('\ndiscriminator hydration end-to-end (backend cp-template echo → client.shapeCpTemplates)');
@@ -701,7 +701,7 @@ console.log(`\nparity: SDK dist vs kron reference builders (curve template ${cur
   const shapedA = CL.shapeCpTemplates(arch);
   const okArch = shapedA.curve.recipientBound === false && shapedA.pool.recipientBound === false
     && shapedA.pool.zeroRemoveAllowed === false && shapedA.pool.canonicalInventoryRequired === true;
-  console.log(`  ${okArch ? 'PASS' : 'FAIL'}  archived pre-round-2 pin (${ARCHIVED_PRE_L12.slice(0, 12)}…) hydrates recipient flags false (curve.rb=${shapedA.curve.recipientBound} pool.rb=${shapedA.pool.recipientBound} zeroRemove=${shapedA.pool.zeroRemoveAllowed})`);
+  console.log(`  ${okArch ? 'PASS' : 'FAIL'}  archived pre-recipient-bound pin (${ARCHIVED_PRE_L12.slice(0, 12)}…) hydrates recipient flags false (curve.rb=${shapedA.curve.recipientBound} pool.rb=${shapedA.pool.recipientBound} zeroRemove=${shapedA.pool.zeroRemoveAllowed})`);
   if (!okArch) fails++;
 
   // Builder byte-parity ON THE SHAPED OBJECTS — proves the shaped templates (production compile, echo-derived

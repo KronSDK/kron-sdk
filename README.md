@@ -10,7 +10,7 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > [KIP-12](https://github.com/kaspanet/kips/pull/44)) and how to adapt it to a specific wallet's injected
 > provider.
 >
-> ⚠️ **Install `@latest` — do not pin an older release.** Every release before 0.16.0 has at least one bug
+> ⚠️ **Install `@latest` — do not pin an older release.** Every release listed below has at least one bug
 > that either gets transactions **rejected on-chain** or produces a **wrong quote**. The floors, newest
 > first (full detail per version in the [CHANGELOG](CHANGELOG.md)):
 >
@@ -62,8 +62,12 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 >   `zeroRemoveAllowed`, `canonicalInventoryRequired`). Hand-shape the response and miss a flag and you build
 >   legacy-ABI transactions that recipient-bound tokens reject at submit with `pick at an invalid location`.
 >   A version bump alone is not enough — `recipientBound` did not exist before 0.18.0, so template code
->   carried over from 0.17.x is necessarily flagless. See
->   [docs/BUILDING-TRADES.md § Recipient-bound schemas](docs/BUILDING-TRADES.md#recipient-bound-schemas-the-current-covenant-abi--requires--0180).
+>   carried over from 0.17.x is necessarily flagless. Note the endpoint's CORS allow-list is
+>   `https://kron.technology` only, so an ordinary browser page — and an MV3 **content** script — cannot call
+>   `cp-template` directly and must proxy it (a Node/server-side call, or an MV3 background/service-worker
+>   fetch with `host_permissions`, is unaffected); `fetchCpTemplates` takes `fetchImpl` and `baseUrl` for
+>   exactly that. See
+>   [docs/BUILDING-TRADES.md § Recipient-bound schemas](docs/BUILDING-TRADES.md#recipient-bound-schemas-requires-0181).
 
 ## Why this exists
 
@@ -109,9 +113,7 @@ npm install @kronsdk/kron-sdk@latest      # newest
 npm install @kronsdk/kron-sdk@0.18.1      # or pin an exact version for reproducible builds
 ```
 
-The package follows semver — **just install `@latest`**; there's no reason to pin an older release. Anything
-below 0.6.0 can't build valid curve/pool/LP/vesting transactions (see the warning above), so avoid pinning
-below it. The token-list client (`client.RegistryClient.tokenlist()`) and on-chain verifier
+The package follows semver — **just install `@latest`**; there's no reason to pin an older release. The token-list client (`client.RegistryClient.tokenlist()`) and on-chain verifier
 (`verify.verifyTokenListEntry`) have been available since **0.2.0** — see [Discover & verify tokens](#discover--verify-tokens-token-list).
 
 ## Quickstart — quote a curve buy (Node)
@@ -151,10 +153,24 @@ const sell = kron.curve.quoteCpSell(cpState, 5_000n);
 if (!sell) console.log('too small to sell — the fixed fee outputs cost more than this returns');
 
 // 4. Build the covenant spend against the LIVE curve. `cpTemplate`/`tokenTemplate` come from KRON's
-//    `POST /api/native/cp-template` endpoint (this package doesn't compile them) — shape the response
-//    with `kron.client.shapeCpTemplates`, which also hydrates the per-token covenant-ABI flags
-//    (`recipientBound` etc.; 0.18.0+). Templates are static per token — fetch once and cache.
-//    See docs/BUILDING-TRADES.md.
+//    `POST /api/native/cp-template` endpoint (this package doesn't compile them). Since 0.18.1
+//    `kron.client.fetchCpTemplates` does that POST and the shaping in one call, hydrating the per-token
+//    covenant-ABI flags (`recipientBound` etc.) from the response's discriminator echo; if you must own
+//    the HTTP call, shape it yourself with `kron.client.shapeCpTemplates` instead. Templates are static
+//    per token — fetch once and cache. See docs/BUILDING-TRADES.md.
+const { curve: cpTemplate, token: tokenTemplate } = await kron.client.fetchCpTemplates({
+  baseUrl: 'https://api.kron.technology',
+  tokenCovid: entry.covenantId,
+  curveParams: p,
+  // REQUIRED — pass the registry record's pin verbatim, or `null` for a pre-pinning entry. Omitting it
+  // makes the backend resolve the CURRENT covenant sources instead of the token's pinned ones.
+  templateVersion: entry.extensions.templateVersion ?? null,
+  // fetchImpl / baseUrl also let a browser page route this through its own proxy — the endpoint's CORS
+  // allow-list is `https://kron.technology` only (see rule 4 above).
+});
+//
+//    Any witness index you pass a builder must be an integer in [0, 127] (`kron.kcc20.MAX_WITNESS_IDX`) —
+//    0x80..0xff decode on-chain as NEGATIVE script numbers; 0.18.0 and earlier silently truncated instead.
 //
 //    curveUtxo/inventoryUtxo: fetch these via `client.SequencerClient.curveHead(curveCovid)`, NOT by
 //    deriving the curve's address yourself from the indexer's `cpState.tokenReserve` and searching for
@@ -243,14 +259,23 @@ kron-sdk
 ├─ spend              tx assembly + the signPskt-style wallet-signing bridge
 ├─ partnerTag         on-chain integrator attribution: encode/parse the partner tag carried in tx.payload
 ├─ wallet             WalletAdapter interface, a generic reference adapter, + cross-wallet provider discovery
-├─ client             typed REST clients (indexer, registry incl. tokenlist(), sequencer) + shapeCpTemplates
+├─ client             typed REST clients (indexer, registry incl. tokenlist(), sequencer)
+│                     + fetchCpTemplates / shapeCpTemplates
 ├─ verify             verify a token-list entry against the chain (anti-spoof, fetcher-injected)
 └─ /wasm              loadKaspa() — the only environment-specific (Node vs browser) export
 ```
 
 Every builder here operates against an **already-deployed** covenant instance — it takes the target's
-current compiled script bytes (read from your indexer, e.g. a UTXO's `redeemScriptHex`) and splices in the
-new state. This package does not include the covenant `.sil` sources or a compiler, and doesn't build the
+current compiled script bytes and splices in the new state. **Where those bytes come from differs by
+covenant.** A KCC-20 token template can legitimately be decoded from a live UTXO's `redeemScriptHex`
+(`kcc20.decodeKcc20Redeem`). A curve, pool or vesting template cannot: a `CpTemplate` additionally needs
+its params object (fee owners, `vKas`, `graduationKas`, fee bps, the dev-fund leg) and a `VestingTemplate`
+needs `stateLen` + params — none of which a raw redeem script exposes — and the per-token ABI
+discriminators cannot be recovered from the compiled bytes at all. So fetch those from
+`POST /api/native/cp-template` and hydrate them with `client.fetchCpTemplates` (or `shapeCpTemplates`);
+a hand-shaped template that drops `recipientBound` builds legacy-ABI transactions that recipient-bound
+tokens reject (0.18.1 warns once per builder when the flag is unhydrated). This package does not include
+the covenant `.sil` sources or a compiler, and doesn't build the
 genesis/deploy transactions that create a *new* curve, pool, or token — only KRON's own deploy tooling does
 that.
 
@@ -279,7 +304,8 @@ The strongest guarantee here is **byte-parity**: `npm run verify:parity` compile
 and asserts that this package's builders produce transactions byte-identical to KRON's production builders —
 across the dev-fund and legacy fee ABIs **and** the recipient-bound covenant ABI (0.18.0+, including the
 pinned KAS legs, padded-carrier continuations, and an end-to-end check that the real backend's template
-echo hydrates the ABI flags through `client.shapeCpTemplates`) — and that the per-input compute budgets
+echo hydrates the ABI flags through `client.fetchCpTemplates` / `client.shapeCpTemplates`) — and that the
+per-input compute budgets
 match. It runs
 automatically in `prepublishOnly`. It needs the (private) KRON repo and the covenant compiler checked out
 locally, and **fails closed (exit 1) when they're absent**. Environments that legitimately lack the private
@@ -345,8 +371,13 @@ Costs ~0.00003 KAS per trade; no covenant logic is touched. Full details:
   `SCALE`; builder names like `buy`/`sell`/`transfer` are generic enough to collide with your own code. So:
   `import * as kron from '@kronsdk/kron-sdk'` then `kron.curve.quoteCpBuy(...)`, `kron.curveCp.buildCpBuy(...)`.
 - **No covenant compiler.** Builders take a target's already-compiled script bytes (`{script, stateStart}`)
-  as input rather than compiling from source — read these from your indexer's live UTXO data. This package
-  can build transactions against existing KRON tokens; it can't compile or deploy a new curve/pool/token.
+  as input rather than compiling from source. For a KCC-20 token template you can read those off your
+  indexer's live UTXO data; for curve/pool/vesting templates you cannot, because they also carry a params
+  object (and, since 0.18.0, ABI discriminators) that a redeem script does not expose — get those from
+  `client.fetchCpTemplates`, which returns `{ token, pool, curve }` already hydrated. The dangerous shape is
+  a hand-built template that *does* carry params but no `recipientBound`: it type-checks, and on a
+  recipient-bound token the covenant rejects it. This package can build transactions against existing KRON
+  tokens; it can't compile or deploy a new curve/pool/token.
 
 ## License
 

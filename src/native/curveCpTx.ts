@@ -12,10 +12,15 @@
 // State region (verify: silverc state_layout {start:1,len:44}): off 1: 0x01 <graduated:1> 0x20 <tokenCovid:32>
 //   0x08 <tokenReserve:8 LE>. tokenReserve is the AUTHORITATIVE token inventory committed to state (this is the
 //   reserve-spoof hardening: buy/sell/graduate read the reserve from state, not from an attacker-chosen input).
-// No top-level SDK import (only `import type`) — caller passes the loaded WASM namespace `k`. Callers need
-// the target curve's compiled script bytes (`CpTemplate.script`) — read them from your indexer's live UTXO
-// data (e.g. the `redeemScriptHex` field), not compiled locally; this package doesn't ship a covenant
-// compiler (see README).
+// No top-level SDK import (only `import type`) — caller passes the loaded WASM namespace `k`. Callers need a
+// full `CpTemplate`, which this package does not compile (no covenant compiler ships here — see README): get it
+// from the KRON backend's `POST /api/native/cp-template`, shaped by `client.fetchCpTemplates()` (or
+// `client.shapeCpTemplates()` if you own the HTTP call). An indexer's raw `redeemScriptHex` is NOT enough: it
+// gives the script bytes alone, while `CpTemplate` also needs `params` (fee owners, vKas, graduationKas, fee
+// bps, dev-fund leg), and the ABI discriminators cannot be recovered from the compiled bytes. On that response
+// the `params` echo is TOP-LEVEL (`response.params`) — NOT nested per template — and it is the same echo that
+// hydrates `params.devFundOwner` / `params.devFundBps`: append that leg on a schema without it and the fee is
+// silently donated; omit it on a schema that has it and the covenant rejects the tx.
 import type { Kaspa } from '../wasm/kaspa.types.js';
 import { continuationValue } from './covenantSelect.js';
 import { SigScriptBuilder, int8LE } from './sigscript.js';

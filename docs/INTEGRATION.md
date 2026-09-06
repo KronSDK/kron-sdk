@@ -309,8 +309,15 @@ extension, web app, explorer frontend) can call directly:
 |---|---|---|
 | `idx.kron.technology` (all `/v1/kcc20/*` reads + SSE) | `*` — open | The integrator read plane; built for this. |
 | `api.…/api/registry/tokenlist`, `api.…/api/registry/token/{covid}/descriptor` | `*` — open | The two registry reads designed for third parties. |
-| everything else on `api.kron.technology` | locked | Server-side only (session-backed / mutating routes). |
+| everything else on `api.kron.technology` — **including `POST /api/native/cp-template`** | locked | Not a session/mutation rule: the two rows above are an explicit allowlist, and *every* other route is locked whether or not it takes auth. `cp-template` takes none and shares the descriptors' compile pool, and is locked all the same. |
 | `seq.kron.technology` | locked | Server-side only today. If you're building **browser-side trading** and need the sequencer from a page context, contact us — this is a deliberate policy, not an oversight. |
+
+**What the `cp-template` lock means in practice.** It answers
+`access-control-allow-origin: https://kron.technology`, so an ordinary web page can't call it — and
+neither can an **MV3 content script**, which is subject to the page's CORS. An **MV3
+background/service-worker** fetch with the host in `host_permissions` is *not* blocked, and neither is
+any server-side/Node call. If you need templates from a page context, route the request through your own
+proxy: `fetchCpTemplates` takes `baseUrl` and `fetchImpl` for exactly that.
 
 Rate limits (subject to tuning; all responses are per-IP):
 
@@ -342,19 +349,43 @@ import { loadKaspa } from '@kronsdk/kron-sdk/wasm';
 
 The builders (`kron.curveCp.*`, `kron.poolCpV3.*`, `kron.kcc20.*`, `kron.vesting.*`) operate against an
 **already-deployed** curve/pool/token: they take the target's current compiled script bytes
-(`{script, stateStart}`) and splice in the new state. Read the script bytes from your indexer's live UTXO
-data (e.g. a UTXO's `redeemScriptHex` — see §4) rather than compiling them; this package doesn't include a
-covenant compiler or the `.sil` sources, and doesn't build the deploy/genesis transactions that create a
-*new* curve, pool, or token. See [README.md](../README.md) for a quickstart.
+(`{script, stateStart}`) and splice in the new state. This package doesn't include a covenant compiler or
+the `.sil` sources, and doesn't build the deploy/genesis transactions that create a *new* curve, pool, or
+token. **Where those script bytes come from differs by covenant family** — don't generalize one path to
+the other:
+
+- **`kcc20` — decode from a live UTXO.** A token UTXO's `redeemScriptHex` (from
+  `GET /v1/kcc20/token/{tick}/address/{address}/utxos`, §4 *Balances & holdings*) is everything
+  `kron.kcc20.decodeKcc20Redeem` needs to produce the splice template + current state. This is the
+  supported path — see *Transfers* below and the §8 send recipe.
+- **`curveCp` / `poolCpV3` / `vesting` — fetch templates from the backend.** A raw `redeemScriptHex`
+  does **not** expose what these builders need. A `CpTemplate` additionally carries its params object
+  (fee owners, `vKas`, graduation target, fee bps, dev-fund leg) and a `VestingTemplate` carries
+  `stateLen` + params; on top of that the covenant-ABI discriminators (`tradeRecipientBound`,
+  `poolRecipientBound`, `zeroRemoveAllowed`, `canonicalLpInventory`) **cannot be recovered from the
+  compiled bytes** — nothing in the SDK decodes them back out. Get them from
+  `POST /api/native/cp-template` via `kron.client.fetchCpTemplates(...)` (see *Covenant entrypoints*
+  below).
+
+See [README.md](../README.md) for a quickstart.
 
 ### Covenant entrypoints (what the builders target)
 
 - **`curve_cp.buy` / `sell`** (`kron.curveCp.buildCpBuy` / `buildCpSell`) — pre-graduation trades against
   the virtual-reserve curve. One buyer per tx (single-UTXO curve); batched execution is a separate roadmap
-  track. **Recipient-bound schemas (≥ 0.18.0):** tokens on the current covenant schema require the
-  buyer/seller to co-sign the P2PK input `presenceWitnessIdx` points at, and the sigscript gains two
-  appended args — gated per token by `curveTpl.recipientBound` / `poolTpl.recipientBound`. Hydrate the
-  flags with `kron.client.shapeCpTemplates` and see *Recipient-bound schemas* in
+  track. **Recipient-bound schemas (≥ 0.18.1 recommended):** on a recipient-bound schema the
+  buyer/seller must co-sign the P2PK input `presenceWitnessIdx` points at, and the sigscript gains two
+  appended args — gated per token by `curveTpl.recipientBound` / `poolTpl.recipientBound`. There are
+  **two** such schemas, and the curve and pool flags resolve **independently**: `4de67d8649eb…` is
+  recipient-bound on the **curve only** (its `amm_pool_cp_v3` entrypoints take no witness args), while
+  `bdbcfb2540d1…` is recipient-bound on **both**. Schema age tells you nothing here — `4de67d8649eb…` is
+  the older of the two. Most live tokens are on legacy schemas, where an absent flag is correct; but
+  leaving it unset on a recipient-bound token builds a sigscript two stack items short and the node
+  rejects it, and setting it true on a legacy schema corrupts the arg stack. So don't guess it — hydrate
+  the flags from the backend with `kron.client.fetchCpTemplates({ baseUrl, tokenCovid, curveParams,
+  templateVersion })`, which fetches and shapes in one call. **`templateVersion` is required**: pass the
+  token's pinned version, or `null` explicitly for a pre-pinning token — omitting it resolves the
+  *current* covenant sources instead of the token's pin. See *Recipient-bound schemas* in
   [BUILDING-TRADES.md](BUILDING-TRADES.md) for the witness-index and output-layout rules (the pool's
   KAS-releasing legs pin the proceeds as explicit P2PK outputs).
 - **`curve_cp.graduate`** (`kron.curveCp.buildCpGraduate`) — seeds the pool once the raise target is hit
@@ -598,8 +629,10 @@ Complete runnable version: [`scripts/example-kcc20-send.mjs`](../scripts/example
 2. `sequencer.curveHead(curveCovid)` for the live spendable outpoint — see §4 "Curve state" and
    §6. Don't derive the curve's address yourself from indexer state and search for its UTXO; that
    path races the indexer and intermittently fails on busy curves.
-3. Build `curve_cp.buy` (`kron.curveCp.buildCpBuy`) against that head — templates from `cp-template`,
-   shaped with `kron.client.shapeCpTemplates` so the token's covenant-ABI flags ride along
+3. Build `curve_cp.buy` (`kron.curveCp.buildCpBuy`) against that head — templates via
+   `kron.client.fetchCpTemplates({ baseUrl, tokenCovid, curveParams, templateVersion })`, which fetches
+   `cp-template` and shapes it so the token's covenant-ABI flags ride along; `templateVersion` is
+   required (the token's pin, or `null` explicitly for a pre-pinning token)
    ([BUILDING-TRADES.md](BUILDING-TRADES.md)) — user signs, submit (`sequencer.curveSubmit`, or direct
    to the node).
 4. Watch `indexer.stream({tick})` for confirmation, then re-read the balance.
@@ -607,8 +640,9 @@ Complete runnable version: [`scripts/example-kcc20-send.mjs`](../scripts/example
 ### TG bot / wallet — swap a graduated token
 
 1. `sequencer.head(tick)` for the in-flight head, or `indexer.poolhead(tick)` if quiet.
-2. Build `amm_pool_cp_v3.swap` (`kron.poolCpV3.*`) against that head (templates via `cp-template` +
-   `kron.client.shapeCpTemplates`, as in the curve recipe), user signs.
+2. Build `amm_pool_cp_v3.swap` (`kron.poolCpV3.*`) against that head (templates via
+   `kron.client.fetchCpTemplates(...)` with its required `templateVersion`, as in the curve recipe),
+   user signs.
 3. `sequencer.submit({...})` (or submit to the node directly).
 
 ---

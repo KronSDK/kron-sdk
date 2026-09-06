@@ -66,6 +66,12 @@ async function main() {
   const cpTplRaw = syntheticTemplate(44, [[0, 0x01], [2, 0x20], [35, 0x08]]); // 44-byte hardened state: graduated + tokenCovid + tokenReserve
   const cpTpl = {
     ...cpTplRaw,
+    // This fixture deliberately exercises the LEGACY curve ABI (buy/sell take 4 declared args, with no
+    // appended witness-index/recipient pair). A synthetic template has no compiler echo to hydrate the
+    // discriminator from, so state it: an explicit `false` is how you ASSERT a legacy schema. It builds
+    // exactly what an unset flag already resolved to — the bytes are unchanged — and it silences the
+    // 0.18.1 unset-flag warning (echo field for the curve: `tradeRecipientBound`).
+    recipientBound: false,
     params: {
       creatorFeeOwner: randomBytes(32), platformFeeOwner: randomBytes(32),
       vKas: cpState.vKas, graduationKas: cpState.graduationKas,
@@ -111,10 +117,15 @@ async function main() {
   const gradCpTplRaw = syntheticTemplate(44, [[0, 0x01], [2, 0x20], [35, 0x08]]);
   const gradCpTpl = {
     ...gradCpTplRaw,
+    recipientBound: false, // legacy curve ABI, asserted explicitly — see cpTpl above
     params: { creatorFeeOwner: randomBytes(32), platformFeeOwner: randomBytes(32), vKas: 1000n, graduationKas: 5_000_000n, creatorFeeBps: 25n, platformFeeBps: 100n, graduationFeeBps: 500n },
   };
   const poolTplRaw = syntheticTemplate(93, [[0, 0x08], [9, 0x08], [18, 0x20], [51, 0x08], [60, 0x20]]);
-  const poolTpl = { ...poolTplRaw };
+  // Legacy pool ABI too (declared args, in declaration order: swapKasForToken 4, swapTokenForKas 3,
+  // addLiquidity 6, removeLiquidity 6; bindLp takes 1 under either ABI). Explicit `false` asserts that
+  // legacy schema for every pool builder below, same as cpTpl (echo field for the pool:
+  // `poolRecipientBound`).
+  const poolTpl = { ...poolTplRaw, recipientBound: false };
   const gradUtxo = { transactionId: 'ff'.repeat(32), index: 0, realKas: 5_000_000n, state: { graduated: false, tokenCovid: gradTokenCovid, tokenReserve: 2500n } };
   const gradInventory = { transactionId: 'ff'.repeat(32), index: 1, value: 1000n, amount: 2500n };
   const gradSpend = kron.curveCp.buildCpGraduate(k, gradCpTpl, tokenTpl, poolTpl, gradUtxo, gradInventory, gradCurveCovid, 1000n);

@@ -70,11 +70,16 @@ const hexOf = (u8: Uint8Array): string => Array.from(u8, (b) => b.toString(16).p
  *  `zeroRemoveAllowed` (HLK-L07): true ⇒ this schema accepts a both-sides-zero redemption (shares burn to the
  *  L inventory); absent/false ⇒ legacy schema, where the covenant rejects it and the quote must keep throwing.
  *  `recipientBound` (HLK-L12): true ⇒ every value-releasing entrypoint takes an appended (witness, identifier)
- *  pair binding the presence-owned outputs — and the KAS legs — to a co-signing recipient; absent/false ⇒
- *  legacy 4/6-arg ABI (archived schemas), no extra pushes. The cp-template response echoes it as
+ *  pair binding the presence-owned outputs — and the KAS legs — to a co-signing recipient; absent/false ⇒ the
+ *  legacy pool ABI, whose DECLARED ARGS run 4/3/6/6 in declaration order (swapKasForToken / swapTokenForKas /
+ *  addLiquidity / removeLiquidity) with no appended pair. `bindLp` takes 1 declared arg under BOTH ABIs and
+ *  never carries the pair. The legacy ABI is the one the great majority of live tokens are pinned to, so an
+ *  absent flag is the CORRECT resolution for them — not a stale default. The cp-template response echoes it as
  *  `poolRecipientBound` — see `client.shapeCpTemplates`. NEVER default either flag to true: an absent
- *  discriminator means the legacy ABI, and appending the extra pushes on a legacy schema corrupts the
- *  covenant's arg stack. */
+ *  discriminator means the legacy ABI, and appending the pair on a legacy schema corrupts the covenant's arg
+ *  stack. The converse is equally fatal: leaving it UNSET on a recipient-bound schema builds a signature script
+ *  two stack items short and the node rejects the tx with "pick at an invalid location". Set it explicitly to
+ *  `false` to assert a legacy schema. */
 export type PoolCpTemplate = { script: Uint8Array; stateStart: number; canonicalInventoryRequired?: boolean; zeroRemoveAllowed?: boolean; recipientBound?: boolean };
 
 /** Pool state: KAS reserve (SCALE units; pool UTXO value == kasReserve·SCALE), token reserve, the token
