@@ -4,7 +4,7 @@
 — a bonding-curve launchpad + AMM DEX — from any JS/TS environment.** Browser or Node. No custody, ever:
 this package only *builds* transactions; a wallet (yours, or your user's) signs them.
 
-> **Status: v0.18.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.18.1, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract (which is
 > [KIP-12](https://github.com/kaspanet/kips/pull/44)) and how to adapt it to a specific wallet's injected
@@ -14,10 +14,15 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > that either gets transactions **rejected on-chain** or produces a **wrong quote**. The floors, newest
 > first (full detail per version in the [CHANGELOG](CHANGELOG.md)):
 >
-> - **≤ 0.17.2** — builders speak only the **legacy covenant ABI**. Against a token launched on the current
->   (recipient-bound, `bdbcfb2540d1…`) schema, every trade and LP transaction is **rejected by the
->   covenant** — funds never move wrong, the tx just bounces. 0.18.0 adds the recipient-bound ABI, gated
->   per token by template discriminators (see rule 4 below); tokens pinned to older schemas are unaffected.
+> - **0.18.0** — has the recipient-bound ABI but selects it from an **optional** template flag that defaults
+>   to legacy when unset, so a template you shaped by hand silently builds legacy transactions that
+>   recipient-bound tokens reject with `pick at an invalid location`. 0.18.1 adds `client.fetchCpTemplates`,
+>   warns when the flag is unhydrated, and throws on a backend echo that carries no discriminators at all.
+> - **≤ 0.17.2** — builders speak only the **legacy covenant ABI**. Against a token launched on a
+>   **recipient-bound** schema (`4de67d8649eb…` and `bdbcfb2540d1…` — note the ABI is not ordered by schema
+>   age, so check the flag rather than guessing from the pin), every trade and LP transaction is **rejected
+>   by the covenant** — funds never move wrong, the tx just bounces. 0.18.0 adds the recipient-bound ABI,
+>   gated per token by template discriminators (see rule 4 below); tokens on legacy schemas are unaffected.
 > - **≤ 0.15.0** — builders emitted a bare `COVENANT_DUST` on covenant-owned CONTINUATION outputs (curve
 >   inventory, pool token reserve, pool L inventory). Tokens launched on the **value-continuation covenant**
 >   enforce `out.value >= in.value` there, so against a reserve someone has PADDED above the dust that
@@ -51,11 +56,14 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 >   **`covenantSelect.continuationValue(dust, inputValue)`**, and add **`covenantSelect.carrierShortfall`** to
 >   your funding. Getting this wrong produces transactions consensus rejects, with no attacker involved —
 >   see [docs/INTEGRATING-KCC20-UTXOS.md](docs/INTEGRATING-KCC20-UTXOS.md).
-> - **Hydrate template ABI flags with `client.shapeCpTemplates`** (0.18.0+). Which covenant ABI a token
->   speaks is pinned per token and echoed by the `cp-template` endpoint; the shaping helper maps that echo
->   onto the builders' template flags (`recipientBound`, `zeroRemoveAllowed`, `canonicalInventoryRequired`).
->   Hand-shape the response and miss a flag, and you build legacy-ABI transactions every new-schema token
->   rejects. See [docs/BUILDING-TRADES.md § Recipient-bound schemas](docs/BUILDING-TRADES.md#recipient-bound-schemas-the-current-covenant-abi--requires--0180).
+> - **Get templates from `client.fetchCpTemplates`** (0.18.1+), or shape your own fetch with
+>   `client.shapeCpTemplates`. Which covenant ABI a token speaks is pinned per token and echoed by the
+>   `cp-template` endpoint; those helpers map that echo onto the builders' template flags (`recipientBound`,
+>   `zeroRemoveAllowed`, `canonicalInventoryRequired`). Hand-shape the response and miss a flag and you build
+>   legacy-ABI transactions that recipient-bound tokens reject at submit with `pick at an invalid location`.
+>   A version bump alone is not enough — `recipientBound` did not exist before 0.18.0, so template code
+>   carried over from 0.17.x is necessarily flagless. See
+>   [docs/BUILDING-TRADES.md § Recipient-bound schemas](docs/BUILDING-TRADES.md#recipient-bound-schemas-the-current-covenant-abi--requires--0180).
 
 ## Why this exists
 
@@ -98,7 +106,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.18.0      # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.18.1      # or pin an exact version for reproducible builds
 ```
 
 The package follows semver — **just install `@latest`**; there's no reason to pin an older release. Anything

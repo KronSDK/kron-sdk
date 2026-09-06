@@ -3,6 +3,67 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.18.1
+
+### Fixed — an unhydrated template no longer builds the wrong ABI in silence
+
+0.18.0 shipped the recipient-bound ABI but left the discriminator optional and the fetch-and-map step to the
+consumer. A template that never got `recipientBound` type-checked cleanly, built the **legacy** signature
+script, and was rejected by the node at submit with:
+
+```
+failed to verify the signature script: encountered invalid state while running script:
+pick at an invalid location
+```
+
+That error is a stack-arity failure, not a signing problem. silverc bakes each entrypoint argument's stack
+depth into the compiled covenant as a constant and reads it with `OP_PICK`; a recipient-bound schema takes
+two appended args (`witness`, `identifier`), so a legacy-arity sigscript leaves every one of those picks
+pointing past the bottom of the stack. Measured on mainnet: a legacy curve buy carries 10 flattened args
+(12 stack items with selector + redeem), a recipient-bound buy carries 12 (14 items). It hit buys and sells
+equally, on exactly the recipient-bound schemas and nothing else — tokens on legacy schemas were always
+correct, because for those an absent flag *is* the right answer.
+
+- **Added `client.fetchCpTemplates()`** — POSTs to `/api/native/cp-template` and returns already-shaped
+  templates, so the un-hydrated path stops existing. `templateVersion` is a **required** option (pass `null`
+  for a pre-pinning record): omitting it from the compile request silently resolves the *current* covenant
+  sources instead of the token's pinned ones. `shapeCpTemplates` remains exported for bring-your-own-fetch.
+- **`shapeCpTemplates` now throws** when the response echoes *no* ABI discriminators at all
+  (`tradeRecipientBound`, `poolRecipientBound`, `zeroRemoveAllowed`, `canonicalLpInventory`). A current
+  backend emits all four as `0`/`1` for every schema — including `0` on legacy pins — so total absence means
+  a pre-HLK deployment that cannot say which ABI a token wants. Shaping it would reproduce exactly this bug.
+- **Builders warn once when `recipientBound` is unset.** `buildCpBuy`, `buildCpSell`,
+  `buildPoolV3SwapKasForToken`, `buildPoolV3SwapTokenForKas`, `buildAddLiquidity` and `buildRemoveLiquidity`
+  emit a single `console.warn` per builder per process naming the node error and the fix. An **explicit
+  `false`** is silent — that is a caller correctly asserting a legacy schema. Silence all with
+  `globalThis.KRON_SDK_SILENCE_ABI_WARNINGS = true`.
+- **Docs/types.** `CpTemplate.recipientBound`'s guidance was a `//` comment, so tsup stripped it from
+  `dist/index.d.ts` and integrators saw a bare `recipientBound?: boolean` with no hover text. It is JSDoc now.
+
+### Fixed — out-of-range witness indices were silently truncated
+
+`transferSigScript` encoded `byte[] witnesses` with `w & 0xff`, so an out-of-range `presenceWitnessIdx`
+became a *different* index rather than an error — `256` silently became `0`, which points at a covenant
+input that carries no signature. Worse, anything ≥ 128 decodes on-chain as a **negative** script number
+(`kcc20.sil`, HLK-L11: "the `>= 0` half is load-bearing"), so the usable ceiling is **127, not 255**. On
+schemas carrying the HLK-L11 bounds check that surfaces as `script ran, but verification failed`; on every
+pre-round-2 kcc20 (`4de67d8649eb…` and older) `tx.inputs[witnesses[i]]` is unguarded and it produces
+`pick at an invalid location` — the same node string as an ABI-arity mismatch, from an unrelated cause.
+
+Witness indices are now validated before anything is built: each must be an integer in `[0, 127]`, and the
+error names the offending position and points at `presenceWitnessIdx`. Exported as `MAX_WITNESS_IDX`. No
+in-range behaviour changes — `verify:parity` is byte-identical.
+
+Behaviour for correctly-hydrated templates is unchanged — no assembled transaction bytes differ. The only
+breaking-ish edge is `shapeCpTemplates` against a pre-HLK backend, which now throws instead of returning
+legacy templates.
+
+> **Upgrading from 0.17.x?** A version bump alone was never sufficient: `recipientBound` did not exist before
+> 0.18.0, so any template-construction code carried across the bump is necessarily flagless. Route templates
+> through `client.fetchCpTemplates()` (or `client.shapeCpTemplates()`).
+
+A future **0.19.0** will make the discriminator a required field so a flagless template is a *compile* error.
+
 ## 0.18.0
 
 ### Added — recipient-bound covenant ABI (HLK-L04 / HLK-L07 / HLK-L12): trade new-schema tokens

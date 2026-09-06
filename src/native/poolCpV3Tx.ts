@@ -13,6 +13,7 @@
 import type { Kaspa } from '../wasm/kaspa.types.js';
 import { continuationValue } from './covenantSelect.js';
 import { SigScriptBuilder } from './sigscript.js';
+import { resolveRecipientBound } from './abiGuard.js';
 import {
   type Kcc20State, type Kcc20Template,
   materializeKcc20Script, kcc20Spk, covenantIdOwned, addressPresenceOwned, pushKcc20StateScalar, transferSigScript,
@@ -78,6 +79,8 @@ export function buildPoolV3SwapKasForToken(
   // Merge tokens are presence-owned: their kcc20 witness MUST be a co-present signed P2PK funding input.
   // Input 0 is the pool covenant (no signature), so the default 0 would fail the on-chain presence check.
   if (mergeTokens.length > 0 && presenceWitnessIdx === 0) throw new Error('presenceWitnessIdx must be set to a co-present signed P2PK funding input when mergeTokens is non-empty (input 0 is the pool covenant and carries no signature)');
+  // An UNSET discriminator silently selects the legacy ABI — see ./abiGuard.ts.
+  resolveRecipientBound(tpl.recipientBound, 'buildPoolV3SwapKasForToken', 'poolRecipientBound');
   // HLK-L12: on a recipient-bound schema the covenant proves tx.inputs[traderWitness] is the trader's own
   // P2PK — a witness pointing at a covenant input (pool, pool token, merges) can never satisfy it.
   if (tpl.recipientBound && presenceWitnessIdx < 2 + mergeTokens.length) throw new Error('swapKasForToken on a recipient-bound schema needs presenceWitnessIdx past the covenant inputs');
@@ -125,6 +128,7 @@ export function buildPoolV3SwapTokenForKas(
   q: PoolCpSellQuote, presenceWitnessIdx: number, opts: { tokenDust?: bigint } = {},
 ): CovenantSpend {
   if (traderTokens.length < 1) throw new Error('need at least one trader token');
+  resolveRecipientBound(tpl.recipientBound, 'buildPoolV3SwapTokenForKas', 'poolRecipientBound');
   // HLK-L12: on a recipient-bound schema the covenant proves tx.inputs[traderWitness] is the trader's own
   // P2PK — a witness pointing at a covenant input (pool, pool token, trader tokens) can never satisfy it.
   if (tpl.recipientBound && presenceWitnessIdx < 2 + traderTokens.length) throw new Error('swapTokenForKas on a recipient-bound schema needs presenceWitnessIdx past the covenant inputs');

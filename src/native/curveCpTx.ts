@@ -31,6 +31,7 @@ import {
   transferSigScript,
 } from './kcc20Tx.js';
 import { genesisCovenantId, covidToBytes } from './genesis.js';
+import { resolveRecipientBound } from './abiGuard.js';
 import { materializePoolCpScript, type PoolCpTemplate } from './poolCpTx.js';
 import { FEE_OUT_MIN, MAX_KAS } from '../curve/cpCurve.js';
 import type { CovenantSpend, CovInput, CovOutput } from './spend.js';
@@ -64,10 +65,16 @@ const devFundLeg = (p: CpParams): { owner: Uint8Array; bps: bigint } | null =>
   p.devFundOwner && p.devFundBps != null ? { owner: p.devFundOwner, bps: p.devFundBps } : null;
 export type CpTemplate = {
   script: Uint8Array; stateStart: number; params: CpParams;
-  // Dual-ABI (HLK-L04): true ⇒ buy/sell take two appended witness args (recipientWitness, recipientIdentifier)
-  // and bind the buyer/change output owner to a co-signed P2PK input. Absent/false ⇒ legacy 4-arg form. The
-  // cp-template response echoes it as `tradeRecipientBound` — see `client.shapeCpTemplates`. NEVER default it
-  // true: pushing the extra args on a legacy schema corrupts the covenant's arg stack.
+  /** Dual-ABI (HLK-L04): true ⇒ buy/sell take two appended witness args (recipientWitness,
+   *  recipientIdentifier) and bind the buyer/change output owner to a co-signed P2PK input. Absent/false ⇒
+   *  legacy 4-arg form. The cp-template response echoes it as `tradeRecipientBound` — hydrate it with
+   *  `client.fetchCpTemplates()` or `client.shapeCpTemplates()`, never by hand.
+   *
+   *  NEVER default it true: pushing the extra args on a legacy schema corrupts the covenant's arg stack.
+   *  Leaving it UNSET on a recipient-bound schema is the opposite hazard — the builder emits a signature
+   *  script two stack items short and the node rejects the tx with "failed to verify the signature script:
+   *  ... pick at an invalid location". An unset flag therefore warns once per builder; set it explicitly to
+   *  `false` to assert a legacy schema. */
   recipientBound?: boolean;
 };
 export type CpCurveState = { graduated: boolean; tokenCovid: Uint8Array; tokenReserve: bigint };
@@ -159,6 +166,9 @@ export function buildCpBuy(
   // Merge tokens are presence-owned: their kcc20 witness MUST be a co-present signed P2PK funding input.
   // Input 0 is the curve covenant (no signature), so the default 0 would fail the on-chain presence check.
   if (mergeTokens.length > 0 && presenceWitnessIdx === 0) throw new Error('presenceWitnessIdx must be set to a co-present signed P2PK funding input when mergeTokens is non-empty (input 0 is the curve covenant and carries no signature)');
+  // An UNSET discriminator silently selects the legacy ABI — right for legacy schemas, a guaranteed
+  // "pick at an invalid location" rejection on a recipient-bound one. Warn once; see ./abiGuard.ts.
+  resolveRecipientBound(tpl.recipientBound, 'buildCpBuy', 'tradeRecipientBound');
   // HLK-L04: on a recipient-bound schema the covenant demands the buyer co-sign a P2PK input carrying the
   // buyerOut key. Inputs [0]=curve, [1]=inventory, [2..]=merged tokens are all covenant inputs, so a witness
   // pointing at any of them is a stale caller — fail at build time instead of a VM rejection.
@@ -236,6 +246,7 @@ export function buildCpSell(
   // rejects (TxOutZero) on EVERY schema — so the `>=` guard is unconditional, not schema-gated.
   if (kasOut <= 0n || kasOut % SCALE !== 0n || kasOut >= utxo.realKas) throw new Error('invalid kasOut — must leave at least 0.01 KAS in the curve');
   if (inventory.amount !== utxo.state.tokenReserve) throw new Error('inventory.amount must equal the curve\'s committed tokenReserve');
+  resolveRecipientBound(tpl.recipientBound, 'buildCpSell', 'tradeRecipientBound');   // see buildCpBuy
   // HLK-L04: see buildCpBuy — inputs [0]=curve, [1]=inventory, [2..]=seller tokens are all covenant inputs.
   if (tpl.recipientBound && presenceWitnessIdx < 2 + sellerTokens.length) {
     throw new Error('recipient-bound schema: presenceWitnessIdx must point at the seller\'s own P2PK funding input (HLK-L04)');

@@ -174,12 +174,39 @@ export function transferSigScript(
   sigs: Uint8Array[] = [],
 ): string {
   if (newStates.length < 1) throw new Error('transfer requires at least one output state');
+  const witnessBytes = encodeWitnesses(witnesses); // validate caller input BEFORE building anything
   const b = new SigScriptBuilder(k);
   pushKcc20States(b, newStates);
   b.column(sigs); // sig[] — fixed-width concat (empty → empty push)
-  b.data(Uint8Array.from(witnesses, (w) => w & 0xff)); // byte[] witnesses
+  b.data(witnessBytes); // byte[] witnesses
   b.redeem(redeem);
   return b.drain();
+}
+
+/** Highest witness index the `byte[] witnesses` encoding can carry. NOT 255: the covenant reads each entry
+ *  as a script number, and 0x80..0xff decode as NEGATIVE (see the HLK-L11 note in kcc20.sil — "the >= 0 half
+ *  is load-bearing"). So 127 is the real ceiling on every schema. */
+export const MAX_WITNESS_IDX = 127;
+
+/** Encode `byte[] witnesses`, refusing any index the covenant cannot read back.
+ *
+ *  This used to be a silent `w & 0xff` truncation, which turned a caller's out-of-range `presenceWitnessIdx`
+ *  into an unspendable transaction with no local error: an index >= 128 decodes on-chain as a negative script
+ *  number, so schemas carrying the HLK-L11 bounds check fail with "script ran, but verification failed", and
+ *  schemas without it (every pre-round-2 kcc20, e.g. `4de67d8649eb…`) index out of range and produce
+ *  "pick at an invalid location" — the same node string as an ABI-arity mismatch, from an unrelated cause.
+ *  Failing here keeps those two apart at build time. */
+function encodeWitnesses(witnesses: number[]): Uint8Array {
+  witnesses.forEach((w, i) => {
+    if (!Number.isInteger(w) || w < 0 || w > MAX_WITNESS_IDX) {
+      throw new Error(
+        `witnesses[${i}] = ${w} is not a usable input index — must be an integer in [0, ${MAX_WITNESS_IDX}]. ` +
+          'KCC-20 witness indices are single bytes and 0x80..0xff decode on-chain as negative script numbers, ' +
+          'so an index >= 128 can never authorize an input. Check the presenceWitnessIdx you passed.',
+      );
+    }
+  });
+  return Uint8Array.from(witnesses);
 }
 
 // --- send (wallet "Send" — the plain user→user transfer) ----------------------------------------

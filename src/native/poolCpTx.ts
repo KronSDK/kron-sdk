@@ -30,6 +30,7 @@ import {
   transferSigScript,
 } from './kcc20Tx.js';
 import { genesisCovenantId, covidToBytes } from './genesis.js';
+import { resolveRecipientBound } from './abiGuard.js';
 import { FEE_OUT_MIN, SCALE } from '../curve/cpCurve.js';
 import type { CovenantSpend, CovInput, CovOutput } from './spend.js';
 import { COVENANT_DUST } from './spend.js';
@@ -361,6 +362,8 @@ export function buildAddLiquidity(
     throw new Error(`Refusing to build addLiquidity: pool LP-bind integrity is ${opts?.lpBindVerified === false ? 'FAILED (counterfeit shares could drain your deposit)' : 'UNVERIFIED'}. Await IndexerClient.assertLpBindSafe(tick), then pass the fetched verdict as opts.lpBindVerified.`);
   }
   if (lpDepositToken.state.amount !== q.dToken) throw new Error('LP deposit token UTXO must equal dToken exactly (split first)');
+  // An UNSET discriminator silently selects the legacy ABI — see ./abiGuard.ts.
+  resolveRecipientBound(tpl.recipientBound, 'buildAddLiquidity', 'poolRecipientBound');
   // HLK-L12: on a recipient-bound schema the covenant proves tx.inputs[lpWitness] is the LP's own P2PK — a
   // witness pointing at a covenant input (0..3) can never satisfy it, so refuse to build one.
   if (tpl.recipientBound && presenceWitnessIdx < 4) throw new Error('addLiquidity on a recipient-bound schema needs presenceWitnessIdx >= 4 (past the covenant inputs)');
@@ -444,6 +447,7 @@ export function buildRemoveLiquidity(
 ): CovenantSpend {
   if (lpShares.state.amount !== q.dShares) throw new Error('LP shares UTXO must equal dShares exactly (split first)');
   const canonical = !!tpl.canonicalInventoryRequired;
+  resolveRecipientBound(tpl.recipientBound, 'buildRemoveLiquidity', 'poolRecipientBound');   // see buildAddLiquidity
   // HLK-L12: on a recipient-bound schema the covenant proves tx.inputs[lpWitness] is the LP's own P2PK — a
   // witness pointing at a covenant input can never satisfy it, so refuse to build one.
   if (tpl.recipientBound && presenceWitnessIdx < (canonical ? 4 : 3)) throw new Error('removeLiquidity on a recipient-bound schema needs presenceWitnessIdx past the covenant inputs');

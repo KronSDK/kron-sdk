@@ -21,21 +21,52 @@ and are verifiable against chain, never to a compiler you'd have to trust.
 
 ## The one endpoint you fetch templates from
 
+**Easiest — let the SDK do both steps (0.18.1+):**
+
+```ts
+const tpls = await kron.client.fetchCpTemplates({
+  baseUrl: 'https://api.kron.technology',
+  tokenCovid:      rec.cp.tokenCovid,
+  curveParams:     rec.cp.curveParams,          // verbatim, don't hand-pick fields
+  templateVersion: rec.cp.templateVersion ?? null,
+});
+// → { token, pool, curve } — script bytes decoded AND every ABI flag hydrated.
+```
+
+Under the hood that is one POST plus the shaping step:
+
 ```
 POST https://api.kron.technology/api/native/cp-template
 {
   ...curveParams,       // spread the WHOLE object verbatim — don't hand-pick fields
   tokenCovid,           // the token's covenant id
-  templateVersion       // { schema, silverc } — pins the exact version (omit = current sources)
+  templateVersion       // { schema, silverc } — pins the exact version
 }
 → { token, pool, curve, params }   // compiled templates { scriptHex, stateStart } + the compiler's params echo
 ```
 
-Shape the response with **`kron.client.shapeCpTemplates`** (0.18.0+) rather than by hand — it decodes the
-script hex AND hydrates the per-token covenant-ABI discriminators from the top-level `params` echo
-(`tradeRecipientBound`, `poolRecipientBound`, `zeroRemoveAllowed`, `canonicalLpInventory` — see
-*Recipient-bound schemas* below). A hand-shaped template that misses a flag builds transactions every
-new-schema token rejects.
+> ⚠️ **Always send `templateVersion`.** Omitting it compiles the **current** covenant sources instead of the
+> ones the token was pinned to — wrong script bytes, wrong address, and the wrong ABI flags for any token
+> not on the newest schema. `fetchCpTemplates` makes it a required option for this reason (pass `null` only
+> for a genuinely pre-pinning registry record).
+
+If you own the HTTP call, shape the response with **`kron.client.shapeCpTemplates`** rather than by hand — it
+decodes the script hex AND hydrates the per-token covenant-ABI discriminators from the **top-level** `params`
+echo (`tradeRecipientBound`, `poolRecipientBound`, `zeroRemoveAllowed`, `canonicalLpInventory` — see
+*Recipient-bound schemas* below). Note `params` is top-level, **not** nested per template.
+
+A hand-shaped template that misses a flag builds transactions every recipient-bound token rejects, with this
+error at submit:
+
+```
+failed to verify the signature script: encountered invalid state while running script:
+pick at an invalid location
+```
+
+That is a stack-arity failure, not a signing problem: a recipient-bound schema's buy/sell takes two extra
+signature-script args, so a legacy-shaped sigscript leaves the covenant's `OP_PICK` reads pointing past the
+bottom of the stack. If you see it, log `curve.recipientBound` — `undefined` means the template was never
+hydrated. Since 0.18.1 the builders warn once per process when that flag is unset.
 
 `curveParams`, `tokenCovid`, and `templateVersion` all come off the token's registry record. Fetch
 them with the SDK's `RegistryClient` (or `GET https://api.kron.technology` token metadata).
