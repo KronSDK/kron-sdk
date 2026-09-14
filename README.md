@@ -88,6 +88,9 @@ npm install @kronsdk/kron-sdk
 
 ## Docs
 
+- **[docs/SUPPORTING-KRON-TOKENS.md](docs/SUPPORTING-KRON-TOKENS.md)** — **for DEXes & wallets:** support a
+  graduated KRON token in your own venue in two steps (read balances, move tokens), run your own pool, no
+  bonding-curve integration. **Start here if you want to list/hold KRON tokens, not trade on KRON.**
 - **[docs/BUILDING-TRADES.md](docs/BUILDING-TRADES.md)** — end-to-end transfer / buy / sell / swap: which
   call goes to the backend (compile) vs. the SDK (assemble), and the per-trade sequence. Also covers
   **partner attribution** (tagging trades so integrator volume is credited). **Start here for trading.**
