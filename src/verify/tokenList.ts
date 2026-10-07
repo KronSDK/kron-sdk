@@ -27,6 +27,12 @@
 // tampering between KRON and you (a hostile mirror, a CDN layer, a modified saved copy); it does NOT
 // replace the per-entry chain check above, and it does not protect against a compromise of KRON's own
 // backend (the key lives there). Verify with `verifyTokenListSignature` below.
+//
+// FRESHNESS (backend ≥ 2026-09): the envelope also carries `seq`/`signedAt`/`ttlSeconds` and a second
+// signature `signatureV2` over `canonicalTokenListMsgV2`, which binds those three fields. v1 alone has no
+// timestamp, so a months-old genuinely-signed list (a delisted token, a reverted logo) still verifies. The
+// verifier checks `signatureV2` whenever it is present; pass `requireFresh: true` to also reject a document
+// with no v2 signature (an attacker can strip it) or one past `signedAt + ttlSeconds`.
 import type { TokenList, TokenListEntry } from '../client/registryClient.js';
 
 /** Minimal shape of a fetched Kaspa transaction — only what the verifier reads. `covenant_id` is the
@@ -82,14 +88,33 @@ export type SignedTokenList = TokenList & {
   variant?: TokenListVariant;
   signature?: string;
   publicKey?: string;
+  /** Monotonic freshness counter (the epoch second the document was signed). */
+  seq?: number;
+  /** Epoch seconds the document was signed. */
+  signedAt?: number;
+  /** How long after `signedAt` the document should be treated as current. */
+  ttlSeconds?: number;
+  /** Signature over `canonicalTokenListMsgV2` — v1 plus `seq`/`signedAt`/`ttlSeconds`. */
+  signatureV2?: string;
 };
+
+/** KRON's mainnet token-list signing key (x-only Schnorr). Published here so the key a consumer pins does
+ *  not come from the same server as the document it authenticates. `verifyTokenListSignature` uses it by
+ *  default for `network: 'mainnet'` lists. The same key signs KRON's pool manifest; if it is ever rotated,
+ *  a new SDK release ships the new key and the change is announced in CHANGELOG.md. */
+export const KRON_TOKENLIST_PUBLIC_KEY = 'f0ff44a11b3f315703b1dced26a2197b4c9869834c791a1e9131df2f6652a3be';
 
 export type VerifySignatureResult = {
   ok: boolean;
   /** Whether the document carried a signature at all (false ⇒ unsigned backend, not a forgery). */
   signed: boolean;
-  /** Which key was checked: the caller's pinned key, or trust-on-first-use of the response's. */
-  keySource?: 'pinned' | 'response';
+  /** Which key was checked: the caller's pinned key, the SDK's built-in mainnet key
+   *  (`KRON_TOKENLIST_PUBLIC_KEY`), or trust-on-first-use of the response's own key. */
+  keySource?: 'pinned' | 'builtin' | 'response';
+  /** Present when the document carried a valid `signatureV2`: whether `now ≤ signedAt + ttlSeconds`. */
+  fresh?: boolean;
+  /** The document's `seq`, when `signatureV2` verified — store it and pass it back as `minSeq` next time. */
+  seq?: number;
   reason?: string;
 };
 
@@ -112,6 +137,19 @@ export const canonicalTokenListMsg = (doc: SignedTokenList): string => JSON.stri
   tokens: doc.tokens ?? [],
 });
 
+/** Canonical v2 message — v1 plus the freshness binding. Same byte contract as v1 with
+ *  `canonicalTokenListMsgV2` in `backend/tokenListSignature.mjs`. */
+export const canonicalTokenListMsgV2 = (doc: SignedTokenList): string => JSON.stringify({
+  v: 'KRON-TOKENLIST-2',
+  network: lc(doc.network),
+  variant: { all: !!doc.variant?.all, tier: doc.variant?.tier ?? null },
+  version: { major: Number(doc.version?.major ?? 0), minor: Number(doc.version?.minor ?? 0), patch: Number(doc.version?.patch ?? 0) },
+  seq: Number(doc.seq ?? 0),
+  signedAt: Number(doc.signedAt ?? 0),
+  ttlSeconds: Number(doc.ttlSeconds ?? 0),
+  tokens: doc.tokens ?? [],
+});
+
 /** Normalize a pubkey to lowercase x-only hex: strips 0x, a 02/03 compressed prefix, or extracts X
  *  from an uncompressed 04-key (same tolerances as the wallet adapter's getXOnlyPublicKey). */
 const xOnly = (key?: string | null): string => {
@@ -123,30 +161,45 @@ const xOnly = (key?: string | null): string => {
 
 /** Verify a token list's platform signature. Never throws — every failure mode is a `reason`.
  *
- *  Key policy (mirrors KRON's pool-manifest verifier): a `pinnedPublicKey` you obtained out-of-band
- *  always wins — if the response names a different key, that's a `signer mismatch` failure. With no
- *  pin, the response's own key is used (trust-on-first-use) and reported as `keySource:'response'`
- *  so you can apply your own policy.
+ *  Key policy (mirrors KRON's pool-manifest verifier): the expected key always wins — if the response
+ *  names a different key, that's a `signer mismatch` failure. The expected key is, in order:
+ *  `pinnedPublicKey` if you pass one; else `KRON_TOKENLIST_PUBLIC_KEY` for a `network: 'mainnet'` list;
+ *  else (a testnet list, or `trustResponseKey: true` for a self-hosted backend) the response's own key,
+ *  reported as `keySource:'response'` — trust-on-first-use, which proves nothing on its own.
  *
  *  `expectedVariant` defaults to the curated default list `{all:false, tier:null}` — pass the
  *  variant you actually requested. A signed document whose bound variant differs (or is missing)
- *  fails: that's the anti-replay check. */
+ *  fails: that's the anti-replay check.
+ *
+ *  Freshness: a present `signatureV2` is always verified (an invalid one fails the document) and sets
+ *  `fresh`/`seq` on the result. `requireFresh: true` additionally fails a document with no v2 signature
+ *  or one that has expired; `minSeq` fails a document older than one you already hold (rollback). */
 export function verifyTokenListSignature(
   kaspa: KaspaMessageVerifier,
   list: SignedTokenList,
-  opts: { pinnedPublicKey?: string; expectedVariant?: Partial<TokenListVariant> } = {},
+  opts: {
+    pinnedPublicKey?: string;
+    trustResponseKey?: boolean;
+    expectedVariant?: Partial<TokenListVariant>;
+    requireFresh?: boolean;
+    minSeq?: number;
+    /** Clock override, epoch ms (tests). */
+    now?: number;
+  } = {},
 ): VerifySignatureResult {
   if (!list?.signature) return { ok: false, signed: false, reason: 'list is unsigned (older backend or signing key not configured)' };
 
-  const pinned = xOnly(opts.pinnedPublicKey);
+  const builtin = !opts.trustResponseKey && lc(list.network) === 'mainnet' ? KRON_TOKENLIST_PUBLIC_KEY : '';
+  const pinned = xOnly(opts.pinnedPublicKey) || builtin;
+  const pinSource: 'pinned' | 'builtin' = opts.pinnedPublicKey ? 'pinned' : 'builtin';
   const fromResponse = xOnly(list.publicKey);
-  let keySource: 'pinned' | 'response';
+  let keySource: 'pinned' | 'builtin' | 'response';
   let publicKey: string;
   if (pinned) {
     if (fromResponse && fromResponse !== pinned) {
-      return { ok: false, signed: true, keySource: 'pinned', reason: `signer mismatch: response publicKey ${fromResponse} != pinned ${pinned}` };
+      return { ok: false, signed: true, keySource: pinSource, reason: `signer mismatch: response publicKey ${fromResponse} != ${pinSource} ${pinned}` };
     }
-    keySource = 'pinned'; publicKey = pinned;
+    keySource = pinSource; publicKey = pinned;
   } else if (fromResponse) {
     keySource = 'response'; publicKey = fromResponse;
   } else {
@@ -166,7 +219,29 @@ export function verifyTokenListSignature(
   } catch (e: any) {
     return { ok: false, signed: true, keySource, reason: `verifyMessage failed: ${e?.message ?? e}` };
   }
-  return valid
-    ? { ok: true, signed: true, keySource }
-    : { ok: false, signed: true, keySource, reason: 'signature verification failed (document was modified, or signed by a different key)' };
+  if (!valid) return { ok: false, signed: true, keySource, reason: 'signature verification failed (document was modified, or signed by a different key)' };
+
+  if (!list.signatureV2) {
+    return opts.requireFresh
+      ? { ok: false, signed: true, keySource, reason: 'requireFresh: document has no signatureV2 (older backend, or the freshness signature was stripped)' }
+      : { ok: true, signed: true, keySource };
+  }
+  let validV2 = false;
+  try {
+    validV2 = kaspa.verifyMessage({ message: canonicalTokenListMsgV2(list), signature: String(list.signatureV2), publicKey }) === true;
+  } catch (e: any) {
+    return { ok: false, signed: true, keySource, reason: `verifyMessage (v2) failed: ${e?.message ?? e}` };
+  }
+  if (!validV2) return { ok: false, signed: true, keySource, reason: 'signatureV2 verification failed (seq/signedAt/ttlSeconds were modified)' };
+
+  const seq = Number(list.seq ?? 0);
+  const expiresAtMs = (Number(list.signedAt ?? 0) + Number(list.ttlSeconds ?? 0)) * 1000;
+  const fresh = (opts.now ?? Date.now()) <= expiresAtMs;
+  if (opts.minSeq != null && seq < opts.minSeq) {
+    return { ok: false, signed: true, keySource, fresh, seq, reason: `rollback: document seq ${seq} is older than minSeq ${opts.minSeq}` };
+  }
+  if (opts.requireFresh && !fresh) {
+    return { ok: false, signed: true, keySource, fresh, seq, reason: `requireFresh: document expired at ${new Date(expiresAtMs).toISOString()}` };
+  }
+  return { ok: true, signed: true, keySource, fresh, seq };
 }

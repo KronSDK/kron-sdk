@@ -262,8 +262,7 @@ entries tagged `extensions.chainVerified:false`.
 
 **The list is platform-signed, and entries are independently chain-verifiable — use both.** The document
 carries `signature`/`publicKey` over the `KRON-TOKENLIST-1` canonical form; `verify.verifyTokenListSignature`
-checks it (pin the platform key out-of-band and pass `pinnedPublicKey` — with no pin it's trust-on-first-use
-against the response's own key). The signature proves the list came from KRON unaltered; it does *not* make
+checks it. The signature proves the list came from KRON unaltered; it does *not* make
 an entry true. For that, each entry carries a `genesisTxid` proof pointer, and `verify.verifyTokenListEntry`
 confirms the entry's `covenantId` is genuinely created on that tx (present as a `covenant_id` on one of its
 outputs), so a spoofed entry can't pass even inside a correctly-signed list:
@@ -281,7 +280,37 @@ for (const entry of list.tokens) {
   const r = await verify.verifyTokenListEntry(entry, fetchTx);   // { ok, covenantIdPresent, reason? }
   if (r.ok) safe.push(entry);                                    // trust only what re-checks against chain
 }
+
+// List signature: mainnet lists are checked against the built-in KRON key by default.
+import { loadKaspa } from '@kronsdk/kron-sdk/wasm';
+const sig = verify.verifyTokenListSignature(await loadKaspa(), list, { requireFresh: true });
 ```
+
+**The signing key.** KRON's mainnet token-list key is
+
+```
+f0ff44a11b3f315703b1dced26a2197b4c9869834c791a1e9131df2f6652a3be
+```
+
+(x-only Schnorr). It ships in the SDK as `verify.KRON_TOKENLIST_PUBLIC_KEY`, and `verifyTokenListSignature`
+uses it automatically for a `network: 'mainnet'` list (`keySource: 'builtin'`); a response naming any other
+key fails with `signer mismatch`. Pass `pinnedPublicKey` to override it. The TN10 staging list is unsigned.
+The same key signs KRON's pool manifest; a rotation ships as a new SDK release and is announced in the
+CHANGELOG.
+
+**Freshness.** v1 has no timestamp, so on its own a months-old list (a token since delisted for fraud, a
+logo since corrected) still verifies. The envelope therefore also carries `seq`, `signedAt`, `ttlSeconds`
+and `signatureV2` over the `KRON-TOKENLIST-2` form, which binds them. The verifier always checks
+`signatureV2` when it is present and reports `fresh` and `seq`. `requireFresh: true` rejects a document with
+no v2 signature (an attacker can strip it and serve the v1-only form) or one past `signedAt + ttlSeconds`;
+`minSeq` rejects a document older than one you already hold.
+
+**What the signature actually protects.** Symbol, name and logo exist only in the registry; the signature is
+what stops a list labelling a scam covenant "KRON". `curveParams` are self-checking: the builders splice them
+into the curve's redeem script, which consensus requires to hash to the on-chain P2SH, so a forged param
+(fee owners, bps, `vKas`) makes the trade reject rather than misdirect funds. Native KRON tokens are all
+`decimals: 0`. The key lives on KRON's backend, so the signature defends the path between KRON and you
+(mirrors, CDN layers, saved copies), not a compromise of KRON's own server.
 
 `fetchTx` is any `(txid) => Promise<tx>` — use `kaspaRestFetchTx(base)`, a node RPC, or a proxy. This does
 **not** re-derive the curve script from params (the SDK has no covenant compiler); the covenant-id-on-genesis
@@ -387,6 +416,16 @@ See [README.md](../README.md) for a quickstart.
   *current* covenant sources instead of the token's pin. See *Recipient-bound schemas* in
   [BUILDING-TRADES.md](BUILDING-TRADES.md) for the witness-index and output-layout rules (the pool's
   KAS-releasing legs pin the proceeds as explicit P2PK outputs).
+- **Sells are fractional on every pinned schema — no full-UTXO rule, no pre-split.** `curve_cp.sell` and
+  `amm_pool_cp_v3.swapTokenForKas` fold `tokenIn` from the seller's piece(s) and return the unsold remainder
+  as ONE presence-owned change output, on all live and archived schemas. Selling therefore *consolidates*
+  a balance rather than fragmenting it.
+- **At most 3 of the trader's token UTXOs per trade.** kcc20 caps a tx at `maxIns` inputs of one token
+  covenant, and the curve inventory / pool reserve always takes one slot. Every KRON schema compiles
+  tokens with `maxIns` 4 (`maxOuts` is 4 or 5 by schema — read both from `fetchCpTemplates`' `token`; the
+  registry returns `null` for them), so a sell, or a buy's `mergeTokens`, carries at most **3** pieces. The
+  builders throw past that (`assertTraderTokenInputs`); compute mass can bind earlier on a large tx. Sell
+  more pieces across several trades — each one leaves a single merged change UTXO.
 - **`curve_cp.graduate`** (`kron.curveCp.buildCpGraduate`) — seeds the pool once the raise target is hit
   (anyone can call; usually triggered by the trade that crosses the threshold).
 - **`amm_pool_cp_v3.swap`** (`kron.poolCpV3.buildPoolV3SwapKasForToken` / `buildPoolV3SwapTokenForKas`) —
@@ -500,17 +539,28 @@ POST /submit                      # pool: enqueue a signed swap
 GET  /status?pool={tick}&txid={txid}  # pool: this tx's lifecycle in the sequencer's view
 GET  /curve/head?covid={covid}    # curve: current in-flight head + queue depth
 POST /curve/submit                # curve: enqueue a signed buy/sell
+GET  /curve/status?covid={covid}&txid={txid}  # curve: this tx's lifecycle (SequencerClient.curveStatus)
 ```
+
+Hosts: mainnet `https://seq.kron.technology` (its `/health` reports `network: "mainnet"`), TN10 staging
+`https://seq.krontest.xyz`. Server-side callers only: CORS is deliberately locked, so a browser page or
+extension context gets a CORS failure rather than a sequencer response (see the CORS table).
 
 The pool endpoints are keyed by the **token tick** (e.g. `pepe`), never the pool P2SH — the pool's
 address moves with its state (`lpCovid` bind, `totalShares` changes), so the tick is the stable key.
 Earlier releases of this doc and `SequencerClient` said `poolP2SH`; a P2SH has never matched.
 
-`/status` returns `{ ok, known, state, txid }` with `state` one of `broadcasting`, `accepted`,
-`rejected`, `broadcast-ambiguous`, `confirmed`, `dropped` (chain evicted), or `unknown` (never seen,
-or aged out). On-chain acceptance remains the settlement truth. After a submit-then-timeout, check
-`/status` before re-submitting a REBUILT tx directly — `broadcast-ambiguous` means the original may
-already be in the mempool, and a rebuilt tx (new txid) would double-spend your own funding inputs.
+`/status` and `/curve/status` return `{ ok, known, state, txid }` with `state` one of `broadcasting`,
+`accepted`, `rejected`, `broadcast-ambiguous`, `confirmed`, `dropped` (chain evicted), or `unknown` (never
+seen, or aged out). This state lives in the sequencer's memory: a restart or age-out turns any txid into
+`unknown`, so `unknown` does not mean the tx failed. On-chain acceptance remains the settlement truth —
+look the txid up on your node or `api.kaspa.org/transactions/<txid>`.
+
+Retrying without double-executing: after a timeout or `broadcast-ambiguous`, **never rebuild**. Re-send the
+identical signed tx (same bytes, same txid): if the first copy landed, the chain rejects the resend as a
+double spend of the same curve/pool outpoint and funding inputs. A rebuilt tx against the new head would
+be a second trade. Rebuild only once the original is confirmed `rejected` or `dropped`, or absent from the
+chain after the head has moved.
 Prefer the `/events` SSE stream over polling for head changes.
 
 Pool swap flow:

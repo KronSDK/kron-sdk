@@ -68,8 +68,8 @@ const qs = (params: Record<string, string | number | undefined>): string => {
 };
 
 export class IndexerClient {
-  /** @param baseUrl e.g. 'https://idx.kron.technology/v1/kcc20' (TN10) — no default baked in; pass the
-   *  network-appropriate URL explicitly (mainnet endpoints publish separately at launch). */
+  /** @param baseUrl mainnet: 'https://idx.kron.technology/v1/kcc20' · TN10 staging:
+   *  'https://idx.krontest.xyz/v1/kcc20' — no default baked in; pass the network-appropriate URL. */
   constructor(private baseUrl: string) {}
 
   info(): Promise<IndexerInfo> { return fetchJson(`${this.baseUrl}/info`); }

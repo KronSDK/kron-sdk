@@ -4,7 +4,7 @@
 — a bonding-curve launchpad + AMM DEX — from any JS/TS environment.** Browser or Node. No custody, ever:
 this package only *builds* transactions; a wallet (yours, or your user's) signs them.
 
-> **Status: v0.18.2, mainnet.** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.19.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract (which is
 > [KIP-12](https://github.com/kaspanet/kips/pull/44)) and how to adapt it to a specific wallet's injected
@@ -111,7 +111,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.18.2      # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.19.0      # or pin an exact version for reproducible builds
 ```
 
 The package follows semver — **just install `@latest`**; there's no reason to pin an older release. The token-list client (`client.RegistryClient.tokenlist()`) and on-chain verifier
@@ -205,8 +205,17 @@ The list is additionally **platform-signed** (backends since 2026-07-27): the en
 `signature`/`publicKey` root fields, and `verify.verifyTokenListSignature` checks them — this authenticates
 list *metadata* (names, logos) against tampering between KRON and you (mirrors, CDN layers, saved copies).
 The canonical message excludes the volatile `timestamp` and **binds the query variant**, so a signed
-`?all=1` document can't be replayed as the curated default list. Pin KRON's publish key out-of-band and
-pass it as `pinnedPublicKey`; per-entry chain verification above remains the root of trust.
+`?all=1` document can't be replayed as the curated default list. KRON's mainnet signing key ships in this
+package as `verify.KRON_TOKENLIST_PUBLIC_KEY`
+(`f0ff44a11b3f315703b1dced26a2197b4c9869834c791a1e9131df2f6652a3be`), and the verifier uses it by default
+for a `mainnet` list, so you are not trusting a key served by the same server as the list. A second
+signature, `signatureV2`, binds `seq`/`signedAt`/`ttlSeconds`: pass `requireFresh: true` to reject stale or
+replayed copies. Per-entry chain verification above remains the root of trust.
+
+What the signature is for: symbol, name and logo exist only in the registry, so the signature is what stops a
+scam covenant being labelled "KRON". `curveParams` don't need it — the builders splice them into the curve's
+redeem script, which must hash to the on-chain P2SH, so a forged param makes the trade reject rather than
+misdirect funds.
 
 ```ts
 import { client, verify } from '@kronsdk/kron-sdk';
@@ -228,10 +237,13 @@ for (const entry of list.tokens) {
 import { loadKaspa } from '@kronsdk/kron-sdk/wasm';
 const kaspa = await loadKaspa();
 const sig = verify.verifyTokenListSignature(kaspa, list, {
-  pinnedPublicKey: KRON_TOKENLIST_PUBKEY,   // pin out-of-band (docs/INTEGRATION.md); omit for trust-on-first-use
+  // mainnet lists are checked against verify.KRON_TOKENLIST_PUBLIC_KEY by default (keySource: 'builtin')
+  requireFresh: true,                       // reject a list with no valid signatureV2, or past signedAt + ttlSeconds
+  // minSeq: lastSeq,                       // reject a rollback to an older list than one you already hold
   // expectedVariant: { all: true },        // pass the variant you actually requested (default: curated list)
 });
 if (!sig.ok) console.warn(`token list signature: ${sig.reason}`);   // sig.signed=false ⇒ older, unsigned backend
+// else store sig.seq and pass it back as minSeq on your next fetch
 ```
 
 `covenantId` (covid `A`) is the **token** id — what a wallet adds/tracks. `extensions.poolCovenantId`

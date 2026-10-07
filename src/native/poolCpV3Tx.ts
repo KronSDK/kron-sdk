@@ -17,6 +17,7 @@ import { resolveRecipientBound } from './abiGuard.js';
 import {
   type Kcc20State, type Kcc20Template,
   materializeKcc20Script, kcc20Spk, covenantIdOwned, addressPresenceOwned, pushKcc20StateScalar, transferSigScript,
+  assertTraderTokenInputs,
 } from './kcc20Tx.js';
 import { SCALE } from '../curve/cpCurve.js';
 import type { CovenantSpend, CovInput, CovOutput } from './spend.js';
@@ -79,6 +80,7 @@ export function buildPoolV3SwapKasForToken(
   // Merge tokens are presence-owned: their kcc20 witness MUST be a co-present signed P2PK funding input.
   // Input 0 is the pool covenant (no signature), so the default 0 would fail the on-chain presence check.
   if (mergeTokens.length > 0 && presenceWitnessIdx === 0) throw new Error('presenceWitnessIdx must be set to a co-present signed P2PK funding input when mergeTokens is non-empty (input 0 is the pool covenant and carries no signature)');
+  assertTraderTokenInputs(tokenTpl, mergeTokens.length, 'buildPoolV3SwapKasForToken');
   // An UNSET discriminator silently selects the legacy ABI — see ./abiGuard.ts.
   resolveRecipientBound(tpl.recipientBound, 'buildPoolV3SwapKasForToken', 'poolRecipientBound');
   // HLK-L12: on a recipient-bound schema the covenant proves tx.inputs[traderWitness] is the trader's own
@@ -128,6 +130,7 @@ export function buildPoolV3SwapTokenForKas(
   q: PoolCpSellQuote, presenceWitnessIdx: number, opts: { tokenDust?: bigint } = {},
 ): CovenantSpend {
   if (traderTokens.length < 1) throw new Error('need at least one trader token');
+  assertTraderTokenInputs(tokenTpl, traderTokens.length, 'buildPoolV3SwapTokenForKas');
   resolveRecipientBound(tpl.recipientBound, 'buildPoolV3SwapTokenForKas', 'poolRecipientBound');
   // HLK-L12: on a recipient-bound schema the covenant proves tx.inputs[traderWitness] is the trader's own
   // P2PK — a witness pointing at a covenant input (pool, pool token, trader tokens) can never satisfy it.

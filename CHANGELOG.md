@@ -3,6 +3,49 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.19.0
+
+Prompted by an integrator's questions while hardening a mainnet integration: which sequencer host is
+mainnet, which key authenticates the token list, how to reconcile an ambiguous curve submit, and what the
+real per-trade token-input limit is. Every answer existed in the backend or the covenants; none was
+reachable from the SDK. `verify:parity` is byte-identical for every transaction builder.
+
+### Behaviour change — token-list signatures are checked against KRON's key by default
+
+- **`verify.KRON_TOKENLIST_PUBLIC_KEY`** (`f0ff44a1…a3be`) is KRON's mainnet token-list signing key, now
+  shipped in the package. `verifyTokenListSignature` uses it by default for a `network: 'mainnet'` list
+  (`keySource: 'builtin'`). Previously, with no `pinnedPublicKey`, it verified against the key named in the
+  response itself — so any list with a self-consistent signature passed, and it proved nothing. A mainnet
+  list signed by any other key now fails with `signer mismatch`. `pinnedPublicKey` still overrides, and
+  `trustResponseKey: true` restores the old behaviour (for a self-hosted backend). Non-mainnet lists are
+  unchanged.
+- **Freshness.** Backends now also emit `seq` / `signedAt` / `ttlSeconds` and `signatureV2` over a new
+  `KRON-TOKENLIST-2` canonical form (`verify.canonicalTokenListMsgV2`). The verifier always checks
+  `signatureV2` when present and reports `fresh` and `seq`. New options: `requireFresh` (reject a document
+  with no v2 signature, or past `signedAt + ttlSeconds`) and `minSeq` (reject a rollback). Without
+  `requireFresh` a stale document still verifies, because an attacker can strip `signatureV2`.
+
+### Added
+
+- **`SequencerClient.curveStatus(curveCovid, txid)`** — the curve counterpart of `status()`, for
+  reconciling a `curveSubmit()` whose response was lost or came back `broadcast-ambiguous`. Both now return
+  the typed `SubmitStatus` (`SubmitState` union), exported from `client`.
+- **`kcc20.assertTraderTokenInputs`** — `buildCpBuy` (`mergeTokens`), `buildCpSell`,
+  `buildPoolV3SwapKasForToken` (`mergeTokens`) and `buildPoolV3SwapTokenForKas` now throw at build time
+  past `maxIns − 1` trader token inputs (3 on every KRON schema: the curve inventory / pool reserve takes
+  one of the token's 4 input slots). Such a tx was always rejected on-chain; it now fails before signing.
+
+### Docs
+
+- Client JSDoc no longer labels the `kron.technology` hosts as TN10. They are mainnet; TN10 staging is
+  `*.krontest.xyz`. The sequencer's server-side-only CORS is stated where its URL is.
+- `buildSplitToken` no longer claims curve/pool sells require whole UTXOs. Every pinned schema sells
+  fractionally and returns the remainder as one change output.
+- `decodeKcc20Redeem`: `maxOuts` is 4 or 5 by schema (5 on batch-enabled schemas, including the KRON
+  token), so its default of 4 under-reports those; take both values from `fetchCpTemplates`.
+- `docs/INTEGRATION.md`: the signing key, freshness and what the signature does and doesn't protect;
+  `/curve/status` and the no-rebuild retry rule; the fractional-sell and 3-piece rules.
+
 ## 0.18.2
 
 ### Docs — no code changes

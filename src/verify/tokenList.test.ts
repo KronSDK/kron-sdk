@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { verifyTokenListEntry, kaspaRestFetchTx, canonicalTokenListMsg, verifyTokenListSignature } from './tokenList.js';
+import { verifyTokenListEntry, kaspaRestFetchTx, canonicalTokenListMsg, canonicalTokenListMsgV2, verifyTokenListSignature, KRON_TOKENLIST_PUBLIC_KEY } from './tokenList.js';
 import type { SignedTokenList } from './tokenList.js';
 import type { TokenListEntry } from '../client/registryClient.js';
 
@@ -96,7 +96,9 @@ const signedList = (over: Partial<SignedTokenList> = {}): SignedTokenList => ({
  *  scripts/verify-parity.mjs (cross-repo round-trip against backend/tokenListSignature.mjs). */
 const fakeKaspaFor = (issuedFor: SignedTokenList, expectedKey = PUB) => ({
   verifyMessage: (a: { message: string; signature: string; publicKey: string }) =>
-    a.message === canonicalTokenListMsg(issuedFor) && a.publicKey === expectedKey,
+    (a.signature === issuedFor.signature ? a.message === canonicalTokenListMsg(issuedFor)
+      : a.signature === issuedFor.signatureV2 && a.message === canonicalTokenListMsgV2(issuedFor))
+    && a.publicKey === expectedKey,
 });
 
 describe('canonicalTokenListMsg', () => {
@@ -144,10 +146,21 @@ describe('verifyTokenListSignature', () => {
     expect(verifyTokenListSignature(fakeKaspaFor(doc), doc, { pinnedPublicKey: `02${PUB}` }).ok).toBe(true);
   });
 
-  it('falls back to the response key (trust-on-first-use) when no pin is given', () => {
-    const doc = signedList();
+  it('mainnet with no pin: checks the built-in KRON key, so a list signed by any other key fails', () => {
+    const doc = signedList(); // network mainnet, signed by PUB (not KRON's key)
     const r = verifyTokenListSignature(fakeKaspaFor(doc), doc);
-    expect(r).toEqual({ ok: true, signed: true, keySource: 'response' });
+    expect(r.ok).toBe(false);
+    expect(r.keySource).toBe('builtin');
+    expect(r.reason).toMatch(/signer mismatch/);
+    const real = signedList({ publicKey: KRON_TOKENLIST_PUBLIC_KEY });
+    expect(verifyTokenListSignature(fakeKaspaFor(real, KRON_TOKENLIST_PUBLIC_KEY), real)).toEqual({ ok: true, signed: true, keySource: 'builtin' });
+  });
+
+  it('falls back to the response key (trust-on-first-use) for a non-mainnet list, or on trustResponseKey', () => {
+    const doc = signedList({ network: 'testnet-10' });
+    expect(verifyTokenListSignature(fakeKaspaFor(doc), doc)).toEqual({ ok: true, signed: true, keySource: 'response' });
+    const main = signedList();
+    expect(verifyTokenListSignature(fakeKaspaFor(main), main, { trustResponseKey: true })).toEqual({ ok: true, signed: true, keySource: 'response' });
   });
 
   it('reports an unsigned list as signed:false, not a forgery', () => {
@@ -177,5 +190,58 @@ describe('verifyTokenListSignature', () => {
     const r = verifyTokenListSignature(throwing, doc, { pinnedPublicKey: PUB });
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/wasm not loaded/);
+  });
+});
+
+describe('verifyTokenListSignature — freshness (signatureV2)', () => {
+  const SIGNED_AT = 1_790_000_000;
+  const fresh = (over: Partial<SignedTokenList> = {}) =>
+    signedList({ seq: SIGNED_AT, signedAt: SIGNED_AT, ttlSeconds: 86_400, signatureV2: 'cafebabe', ...over });
+  const inWindow = (SIGNED_AT + 60) * 1000;
+
+  it('golden string: v2 canonical bytes match backend/tokenListSignature.mjs', () => {
+    const doc = fresh({ tokens: [] });
+    expect(canonicalTokenListMsgV2(doc)).toBe(
+      '{"v":"KRON-TOKENLIST-2","network":"mainnet","variant":{"all":false,"tier":null},'
+      + '"version":{"major":1,"minor":2,"patch":3},'
+      + `"seq":${SIGNED_AT},"signedAt":${SIGNED_AT},"ttlSeconds":86400,"tokens":[]}`,
+    );
+  });
+
+  it('verifies v2 when present and reports fresh + seq', () => {
+    const doc = fresh();
+    const r = verifyTokenListSignature(fakeKaspaFor(doc), doc, { pinnedPublicKey: PUB, now: inWindow });
+    expect(r).toEqual({ ok: true, signed: true, keySource: 'pinned', fresh: true, seq: SIGNED_AT });
+  });
+
+  it('a tampered signedAt/ttl fails v2 even though v1 still verifies', () => {
+    const doc = fresh();
+    const r = verifyTokenListSignature(fakeKaspaFor(doc), { ...doc, ttlSeconds: 10 ** 9 }, { pinnedPublicKey: PUB, now: inWindow });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/signatureV2/);
+  });
+
+  it('an expired document is ok but fresh:false — and fails under requireFresh', () => {
+    const doc = fresh();
+    const late = (SIGNED_AT + 86_400 + 1) * 1000;
+    expect(verifyTokenListSignature(fakeKaspaFor(doc), doc, { pinnedPublicKey: PUB, now: late })).toMatchObject({ ok: true, fresh: false });
+    const r = verifyTokenListSignature(fakeKaspaFor(doc), doc, { pinnedPublicKey: PUB, now: late, requireFresh: true });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/expired/);
+  });
+
+  it('requireFresh fails a document whose signatureV2 was stripped', () => {
+    const doc = signedList();
+    const r = verifyTokenListSignature(fakeKaspaFor(doc), doc, { pinnedPublicKey: PUB, requireFresh: true });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/no signatureV2/);
+  });
+
+  it('minSeq rejects a rollback to an older document', () => {
+    const doc = fresh();
+    const r = verifyTokenListSignature(fakeKaspaFor(doc), doc, { pinnedPublicKey: PUB, now: inWindow, minSeq: SIGNED_AT + 1 });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/rollback/);
+    expect(verifyTokenListSignature(fakeKaspaFor(doc), doc, { pinnedPublicKey: PUB, now: inWindow, minSeq: SIGNED_AT }).ok).toBe(true);
   });
 });

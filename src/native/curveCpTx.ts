@@ -34,6 +34,7 @@ import {
   addressPresenceOwned,
   pushKcc20StateScalar,
   transferSigScript,
+  assertTraderTokenInputs,
 } from './kcc20Tx.js';
 import { genesisCovenantId, covidToBytes } from './genesis.js';
 import { resolveRecipientBound } from './abiGuard.js';
@@ -171,6 +172,7 @@ export function buildCpBuy(
   // Merge tokens are presence-owned: their kcc20 witness MUST be a co-present signed P2PK funding input.
   // Input 0 is the curve covenant (no signature), so the default 0 would fail the on-chain presence check.
   if (mergeTokens.length > 0 && presenceWitnessIdx === 0) throw new Error('presenceWitnessIdx must be set to a co-present signed P2PK funding input when mergeTokens is non-empty (input 0 is the curve covenant and carries no signature)');
+  assertTraderTokenInputs(tokenTpl, mergeTokens.length, 'buildCpBuy');
   // An UNSET discriminator silently selects the legacy ABI — right for legacy schemas, a guaranteed
   // "pick at an invalid location" rejection on a recipient-bound one. Warn once; see ./abiGuard.ts.
   resolveRecipientBound(tpl.recipientBound, 'buildCpBuy', 'tradeRecipientBound');
@@ -246,6 +248,7 @@ export function buildCpSell(
 ): CovenantSpend {
   if (utxo.state.graduated) throw new Error('curve has graduated — sells are locked');
   if (sellerTokens.length < 1) throw new Error('need at least one seller token');
+  assertTraderTokenInputs(tokenTpl, sellerTokens.length, 'buildCpSell');
   if (tokenIn <= 0n) throw new Error('tokenIn must be positive');
   // HLK-L05: a full drain (kasOut == realKas) would emit a zero-value curve output, which Kaspa consensus
   // rejects (TxOutZero) on EVERY schema — so the `>=` guard is unconditional, not schema-gated.
@@ -363,9 +366,10 @@ export function buildCpGraduate(
 
 /**
  * Split a presence-owned token UTXO into [sellAmount, change], both still presence-owned by the same holder —
- * a plain conserving kcc20 transfer authorized by a co-present P2PK input at `presenceWitnessIdx`. Lets a
- * holder sell an ARBITRARY amount on covenants that require full-UTXO sells (curve/pool): split, then sell the
- * `sellAmount` piece. No curve/pool involved — just the token covenant.
+ * a plain conserving kcc20 transfer authorized by a co-present P2PK input at `presenceWitnessIdx`. Not needed
+ * to sell a partial amount: every pinned curve schema and the v3 pool sell fractionally (`buildCpSell` /
+ * `buildPoolV3SwapTokenForKas` return the unsold remainder as change). Use this when you want a separate
+ * piece for some other reason. No curve/pool involved — just the token covenant.
  * Pass `opts.tokenCovid` (the token's covenant id, hex — `covenantId` from the indexer) so both outputs carry
  * the KIP-20 covenant binding the chain requires; without it the assembled tx fails on-chain.
  */

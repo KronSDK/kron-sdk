@@ -20,6 +20,10 @@ export type SubmitResult =
   | { ok: true; txid: string; position: number }
   | { ok: false; reason: string; retry: boolean };
 
+/** The sequencer's record of a submitted txid (`status()` / `curveStatus()`). */
+export type SubmitState = 'broadcasting' | 'accepted' | 'rejected' | 'broadcast-ambiguous' | 'confirmed' | 'dropped' | 'unknown';
+export type SubmitStatus = { ok: boolean; known: boolean; state: SubmitState; txid: string };
+
 /** The curve head a client builds a pre-graduation buy/sell against: the curve covenant UTXO
  *  (`poolOutpoint` slot) + the curve-owned token inventory (`poolTokenOutpoint` slot). `head` is null when
  *  no chain is in flight (depth 0) — resolve your own live head from the node/indexer in that case. */
@@ -33,7 +37,9 @@ export type CurveHeadResult =
   | { ok: false; reason: string };
 
 export class SequencerClient {
-  /** @param baseUrl e.g. 'https://seq.kron.technology' (TN10) */
+  /** @param baseUrl mainnet: 'https://seq.kron.technology' · TN10 staging: 'https://seq.krontest.xyz'.
+   *  Server-side callers only: the sequencer's CORS is deliberately locked, so a browser page or
+   *  extension context gets a CORS failure, not a sequencer response. */
   constructor(private baseUrl: string) {}
 
   async health(): Promise<{ ok: boolean; markets?: ('pool' | 'curve')[]; attribution?: boolean }> {
@@ -106,9 +112,23 @@ export class SequencerClient {
    *  On-chain acceptance is the settlement truth; poll this (or subscribe to `events()`) after `submit()`.
    *  `broadcast-ambiguous` means the tx may already be in the mempool — do NOT re-submit a REBUILT tx
    *  (new txid) on a timeout without checking here first, or you can double-spend your own funding inputs. */
-  async status(tick: string, txid: string): Promise<{ ok: boolean; known: boolean; state: string; txid: string }> {
+  async status(tick: string, txid: string): Promise<SubmitStatus> {
     const res = await fetch(`${this.baseUrl}/status?pool=${encodeURIComponent(tick)}&txid=${encodeURIComponent(txid)}`);
     if (!res.ok) throw new Error(`sequencer status -> HTTP ${res.status}`);
+    return res.json();
+  }
+
+  /** `status()` for a pre-graduation curve trade, keyed by the curve covenant id (the same key as
+   *  `curveHead()` / `curveSubmit()`). Use it to reconcile a `curveSubmit()` whose response was lost or
+   *  came back `broadcast-ambiguous`.
+   *
+   *  The sequencer keeps this state in memory: a restart or age-out turns any txid into `unknown`, so
+   *  `unknown` does NOT mean the tx failed — check the chain (node, or `api.kaspa.org/transactions/<txid>`)
+   *  before concluding. To retry safely, re-send the IDENTICAL signed tx (same txid): if the first copy
+   *  landed, the chain rejects the resend as a double spend. Never rebuild while the outcome is unresolved. */
+  async curveStatus(curveCovid: string, txid: string): Promise<SubmitStatus> {
+    const res = await fetch(`${this.baseUrl}/curve/status?covid=${encodeURIComponent(curveCovid)}&txid=${encodeURIComponent(txid)}`);
+    if (!res.ok) throw new Error(`sequencer curve status -> HTTP ${res.status}`);
     return res.json();
   }
 

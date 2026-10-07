@@ -59,6 +59,18 @@ export function materializeKcc20Script(tpl: Kcc20Template, state: Kcc20State): U
   return out;
 }
 
+/** kcc20 caps a tx at `maxIns` inputs of one token covenant, and a curve/pool trade always spends one of
+ *  them itself (the curve inventory or the pool reserve). So a single trade can carry at most
+ *  `maxIns − 1` of the trader's own token pieces — 3 on every KRON schema. Throws at build time instead
+ *  of a `script ran, but verification failed` rejection at submit. Compute mass can bind earlier on a
+ *  large tx. */
+export function assertTraderTokenInputs(tpl: Kcc20Template, count: number, builder: string): void {
+  const max = tpl.maxIns - 1;
+  if (count > max) {
+    throw new Error(`${builder}: ${count} trader token inputs exceeds the token's limit of ${max} per trade (maxIns ${tpl.maxIns}, one slot is the curve inventory / pool reserve) — split across trades`);
+  }
+}
+
 // --- redeem-script decode (template + state from a live UTXO's redeemScriptHex) ------------------
 
 /**
@@ -68,8 +80,12 @@ export function materializeKcc20Script(tpl: Kcc20Template, state: Kcc20State): U
  * requires it to match at exactly ONE offset. This is the supported way to build the template for
  * `materializeKcc20Script` — splice the SAME script the chain holds; never re-compile.
  * `maxIns`/`maxOuts` are compiled constants not recoverable from the bytes — pass the token's deploy
- * params if you know them (KRON deploys use 4/4, the default) — they are informational only (the splice
- * uses just `script` + `stateStart`).
+ * params if you know them. Every KRON schema compiles tokens with `maxIns` 4; `maxOuts` is 4 or 5
+ * depending on the schema (batch-enabled schemas, including the KRON token's, use 5), so the default
+ * of 4 under-reports those. The authoritative values are `token.maxIns`/`token.maxOuts` from
+ * `fetchCpTemplates`. The splice itself uses only `script` + `stateStart`; trade builders read
+ * `maxIns` to cap how many of the trader's token pieces one trade can carry (see
+ * `assertTraderTokenInputs`).
  */
 export function decodeKcc20Redeem(redeem: Uint8Array, opts: { maxIns?: number; maxOuts?: number } = {}): { template: Kcc20Template; state: Kcc20State } {
   const hits: number[] = [];

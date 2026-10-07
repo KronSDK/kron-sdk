@@ -308,6 +308,16 @@ console.log(`\nparity: SDK dist vs kron reference builders (curve template ${cur
   const rt = ok.ok === true && tampered.ok === false;
   console.log(`  ${rt ? 'PASS' : 'FAIL'}  tokenlist sign (backend) → verify (SDK) round-trip + tamper-fails`);
   if (!rt) fails++;
+  const fresh = { seq: 1_790_000_000, signedAt: 1_790_000_000, ttlSeconds: 86_400 };
+  const eqV2 = T.canonicalTokenListMsgV2({ ...doc, ...fresh }) === V.canonicalTokenListMsgV2({ ...doc, ...fresh });
+  console.log(`  ${eqV2 ? 'PASS' : 'FAIL'}  tokenlist v2 (freshness) canonicalizer byte-parity (backend ↔ SDK)`);
+  if (!eqV2) fails++;
+  const okFresh = V.verifyTokenListSignature(kaspa, signed, { pinnedPublicKey: String(kp.xOnlyPublicKey), requireFresh: true });
+  const stretched = V.verifyTokenListSignature(kaspa, { ...signed, ttlSeconds: signed.ttlSeconds * 1000 }, { pinnedPublicKey: String(kp.xOnlyPublicKey) });
+  const stripped = V.verifyTokenListSignature(kaspa, { ...signed, signatureV2: undefined }, { pinnedPublicKey: String(kp.xOnlyPublicKey), requireFresh: true });
+  const rtV2 = okFresh.ok === true && okFresh.fresh === true && stretched.ok === false && stripped.ok === false;
+  console.log(`  ${rtV2 ? 'PASS' : 'FAIL'}  tokenlist v2 round-trip: requireFresh passes, stretched ttl + stripped v2 fail`);
+  if (!rtV2) fails++;
 }
 
 // --- POOL QUOTES (KRN-SDK-POOL): the numeric path the covenant enforces -----------------------------

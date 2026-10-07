@@ -91,7 +91,7 @@ export type TokenList = {
 };
 
 export class RegistryClient {
-  /** @param baseUrl e.g. 'https://api.kron.technology' (TN10) */
+  /** @param baseUrl mainnet: 'https://api.kron.technology' · TN10 staging: 'https://api.krontest.xyz' */
   constructor(private baseUrl: string) {}
 
   async tokens(): Promise<RegistryToken[]> {
