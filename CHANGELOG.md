@@ -3,6 +3,31 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.19.1
+
+### Corrected — the retry guidance shipped in 0.19.0 was unsafe through the sequencer
+
+0.19.0's `curveStatus()` JSDoc and `docs/INTEGRATION.md` said to retry an ambiguous submit by re-sending the
+identical signed tx, "because the chain rejects the resend as a double spend". Through the sequencer the
+resend never reached the chain: the sequencer answered `stale-head` with `retry: true`, because the tx's
+prevHead was no longer the tip. A client that took `retry: true` as "rebuild" executed a second trade.
+
+- **Sequencer (server side, deployed with this release):** `/submit` and `/curve/submit` now answer a resend
+  of a txid they already hold from their record — `{ ok: true, duplicate: true, state }` — without
+  re-ordering it. An ambiguous first broadcast is re-broadcast; the node takes it or reports it already
+  held. Partner attribution is not recorded twice. A rejected or dropped txid takes the normal path.
+- **Docs:** the retry procedure now says to re-send the identical stored string, treat `duplicate` as
+  success, and treat a `stale-head` reply to a resend as "reconcile with status + chain", never as
+  "rebuild". Also documented: `signedTx` need not be byte-identical across serializers, because the
+  sequencer recomputes the txid (which excludes signature scripts and the mass commit) and checks it.
+- **Types:** `SubmitResult` now carries the optional `duplicate` / `state` (success) and `ambiguous` /
+  `txid` (failure) fields the sequencer already returns; `retry` is optional.
+- **CORS:** documented that MV3 extensions work with `host_permissions` for `https://seq.kron.technology/*`
+  (there is no auth or Origin check behind the CORS lock), and that relaying many users through one
+  backend IP shares one per-IP rate bucket.
+
+No transaction builder changed; `verify:parity` is byte-identical.
+
 ## 0.19.0
 
 Prompted by an integrator's questions while hardening a mainnet integration: which sequencer host is

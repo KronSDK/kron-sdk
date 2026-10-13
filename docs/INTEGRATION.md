@@ -340,7 +340,7 @@ extension, web app, explorer frontend) can call directly:
 | `api.…/api/registry/tokenlist`, `api.…/api/registry/token/{covid}/descriptor` | `*` — open | The two registry reads designed for third parties. |
 | `api.…/api/native/cp-template` | `*` — open | Covenant templates. A pure deterministic compile — no session, no auth, no stored state — so it is allowlisted for browser callers like the two rows above. Compile-rate-limited per IP. |
 | everything else on `api.kron.technology` | locked | Not a session/mutation rule: the rows above are an explicit allowlist, and *every* other route is locked whether or not it takes auth. |
-| `seq.kron.technology` | locked | Server-side only today. If you're building **browser-side trading** and need the sequencer from a page context, contact us — this is a deliberate policy, not an oversight. |
+| `seq.kron.technology` | locked | Closed to arbitrary web pages (deliberate). There is no auth and no Origin check behind it, so server-side callers and **MV3 browser extensions** work: declare `host_permissions: ["https://seq.kron.technology/*"]` and call from the extension page or service worker (content scripts stay bound by the page's CORS). Prefer that over relaying through your own backend: submit and read rate limits are per client IP and sized for individual users, so a relay puts all your users in one bucket. Building trading into a plain web page? Contact us. |
 
 **Calling `cp-template` from a browser.** It answers `access-control-allow-origin: *` on every response,
 errors included, so a web page, an MV3 content script, an MV3 background/service-worker and a server-side
@@ -543,8 +543,9 @@ GET  /curve/status?covid={covid}&txid={txid}  # curve: this tx's lifecycle (Sequ
 ```
 
 Hosts: mainnet `https://seq.kron.technology` (its `/health` reports `network: "mainnet"`), TN10 staging
-`https://seq.krontest.xyz`. Server-side callers only: CORS is deliberately locked, so a browser page or
-extension context gets a CORS failure rather than a sequencer response (see the CORS table).
+`https://seq.krontest.xyz`. CORS is locked to KRON's own site, so an ordinary web page gets a CORS failure
+rather than a sequencer response; server-side callers and MV3 extensions with `host_permissions` work (see
+the CORS table).
 
 The pool endpoints are keyed by the **token tick** (e.g. `pepe`), never the pool P2SH — the pool's
 address moves with its state (`lpCovid` bind, `totalShares` changes), so the tick is the stable key.
@@ -556,11 +557,25 @@ seen, or aged out). This state lives in the sequencer's memory: a restart or age
 `unknown`, so `unknown` does not mean the tx failed. On-chain acceptance remains the settlement truth —
 look the txid up on your node or `api.kaspa.org/transactions/<txid>`.
 
-Retrying without double-executing: after a timeout or `broadcast-ambiguous`, **never rebuild**. Re-send the
-identical signed tx (same bytes, same txid): if the first copy landed, the chain rejects the resend as a
-double spend of the same curve/pool outpoint and funding inputs. A rebuilt tx against the new head would
-be a second trade. Rebuild only once the original is confirmed `rejected` or `dropped`, or absent from the
-chain after the head has moved.
+**Retrying without double-executing.** After a timeout, a lost response or `broadcast-ambiguous`, **never
+rebuild** — a rebuilt tx against the new head is a second trade. Instead:
+
+1. Re-send the **identical stored signed-tx string** (don't re-serialize) to the same endpoint. The sequencer
+   answers a txid it already holds from its record — `{ ok: true, duplicate: true, state }` — without
+   re-ordering it, and re-broadcasts one whose first broadcast was ambiguous (the node takes it or reports
+   it already held). Partner attribution is not recorded twice.
+2. If the resend comes back `stale-head` with `retry: true`, do **not** treat that as "rebuild". It means the
+   sequencer no longer has a record of the txid (it restarted, or aged the entry out) while the head has
+   moved — possibly because your first copy landed. Reconcile with `/status` / `/curve/status` and the
+   chain (your node, or `api.kaspa.org/transactions/<txid>`).
+3. Rebuild only once the original is `rejected` or `dropped`, or absent from the chain after the head has
+   moved.
+
+Serialization does not need to be byte-identical across your clients: the sequencer decodes `signedTx` with
+the Kaspa WASM `Transaction.deserializeFromSafeJSON`, recomputes the txid and rejects `txid-mismatch` against
+the `txid` you sent. A v1 txid commits to inputs, outputs, covenant bindings, compute budgets and payload,
+and excludes signature scripts and the mass commit — two serializers that decode to the same transaction
+give the same txid.
 Prefer the `/events` SSE stream over polling for head changes.
 
 Pool swap flow:

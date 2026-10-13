@@ -16,9 +16,12 @@ export type SequencerHead = {
   depth: number;
 };
 
+/** `duplicate: true` = a resend of a txid the sequencer already held; `state` is its recorded state and
+ *  nothing was re-ordered. `ambiguous: true` = the broadcast outcome is unknown — reconcile with
+ *  `status()` / `curveStatus()`, never rebuild. */
 export type SubmitResult =
-  | { ok: true; txid: string; position: number }
-  | { ok: false; reason: string; retry: boolean };
+  | { ok: true; txid: string; position: number; duplicate?: boolean; state?: SubmitState }
+  | { ok: false; reason: string; retry?: boolean; ambiguous?: boolean; txid?: string };
 
 /** The sequencer's record of a submitted txid (`status()` / `curveStatus()`). */
 export type SubmitState = 'broadcasting' | 'accepted' | 'rejected' | 'broadcast-ambiguous' | 'confirmed' | 'dropped' | 'unknown';
@@ -38,8 +41,10 @@ export type CurveHeadResult =
 
 export class SequencerClient {
   /** @param baseUrl mainnet: 'https://seq.kron.technology' · TN10 staging: 'https://seq.krontest.xyz'.
-   *  Server-side callers only: the sequencer's CORS is deliberately locked, so a browser page or
-   *  extension context gets a CORS failure, not a sequencer response. */
+   *  CORS is deliberately locked to KRON's own site, so an ordinary web page gets a CORS failure, not a
+   *  sequencer response. Server-side callers work, as do MV3 extensions that declare
+   *  `host_permissions: ["https://seq.kron.technology/*"]` and call from the extension page or service
+   *  worker (not a content script). Rate limits are per client IP. */
   constructor(private baseUrl: string) {}
 
   async health(): Promise<{ ok: boolean; markets?: ('pool' | 'curve')[]; attribution?: boolean }> {
@@ -124,8 +129,15 @@ export class SequencerClient {
    *
    *  The sequencer keeps this state in memory: a restart or age-out turns any txid into `unknown`, so
    *  `unknown` does NOT mean the tx failed — check the chain (node, or `api.kaspa.org/transactions/<txid>`)
-   *  before concluding. To retry safely, re-send the IDENTICAL signed tx (same txid): if the first copy
-   *  landed, the chain rejects the resend as a double spend. Never rebuild while the outcome is unresolved. */
+   *  before concluding.
+   *
+   *  Safe retry after a lost response or `broadcast-ambiguous`: re-send the IDENTICAL stored signed tx
+   *  string to `curveSubmit()`. The sequencer answers a txid it already holds from its record
+   *  (`{ ok: true, duplicate: true, state }`) instead of re-ordering it, and re-broadcasts an ambiguous one.
+   *  If the resend comes back `stale-head` / `retry: true` (a sequencer that restarted, or one predating
+   *  duplicate handling), that does NOT mean the first copy failed: reconcile with this method and the chain
+   *  first. Rebuild only once the original is `rejected` / `dropped`, or absent from the chain after the
+   *  head has moved — a rebuilt tx is a second trade. */
   async curveStatus(curveCovid: string, txid: string): Promise<SubmitStatus> {
     const res = await fetch(`${this.baseUrl}/curve/status?covid=${encodeURIComponent(curveCovid)}&txid=${encodeURIComponent(txid)}`);
     if (!res.ok) throw new Error(`sequencer curve status -> HTTP ${res.status}`);
