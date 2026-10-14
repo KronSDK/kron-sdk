@@ -420,12 +420,15 @@ See [README.md](../README.md) for a quickstart.
   `amm_pool_cp_v3.swapTokenForKas` fold `tokenIn` from the seller's piece(s) and return the unsold remainder
   as ONE presence-owned change output, on all live and archived schemas. Selling therefore *consolidates*
   a balance rather than fragmenting it.
-- **At most 3 of the trader's token UTXOs per trade.** kcc20 caps a tx at `maxIns` inputs of one token
-  covenant, and the curve inventory / pool reserve always takes one slot. Every KRON schema compiles
-  tokens with `maxIns` 4 (`maxOuts` is 4 or 5 by schema — read both from `fetchCpTemplates`' `token`; the
-  registry returns `null` for them), so a sell, or a buy's `mergeTokens`, carries at most **3** pieces. The
-  builders throw past that (`assertTraderTokenInputs`); compute mass can bind earlier on a large tx. Sell
-  more pieces across several trades — each one leaves a single merged change UTXO.
+- **Trader token UTXOs per trade: at most 2 on the curve, 3 on the pool.** kcc20 caps a tx at `maxIns`
+  inputs of one token covenant, and the curve inventory / pool reserve always takes one slot. Every KRON
+  schema compiles tokens with `maxIns` 4 (`maxOuts` is 4 or 5 by schema — read both from
+  `fetchCpTemplates`' `token`; the registry returns `null` for them), so kcc20 allows 3 pieces. On the
+  **bonding curve** compute mass binds first: the curve_cp redeem is heavier than the pool's, and a 3-piece
+  curve sell measures ~510k compute mass (509,739 observed on-chain), over the 500k consensus cap — so curve
+  sells and curve buy `mergeTokens` carry at most **2** (`MAX_CURVE_TRADER_TOKEN_INPUTS`). Pool trades take 3.
+  The builders throw past either limit (`assertTraderTokenInputs`). Sell more pieces across several trades,
+  or consolidate first — each trade leaves a single merged change UTXO.
 - **`curve_cp.graduate`** (`kron.curveCp.buildCpGraduate`) — seeds the pool once the raise target is hit
   (anyone can call; usually triggered by the trade that crosses the threshold).
 - **`amm_pool_cp_v3.swap`** (`kron.poolCpV3.buildPoolV3SwapKasForToken` / `buildPoolV3SwapTokenForKas`) —
@@ -644,7 +647,20 @@ it as legacy and move to the payload tag. A malformed sequencer `ref` is rejecte
 sequencer advertises the field via `health().attribution`.
 
 In both markets, direct node submission also works under low contention — the sequencer is a
-convenience for hot markets, and any sequencer-side gate should fall back to direct submission.
+convenience for hot markets, not a validator. Fallback policy (what KRON's own web client does):
+
+- **`head: null` is not a gate.** It is the normal state for any idle market, and for every market right
+  after a sequencer restart. Build against the node's live UTXO and submit to the sequencer anyway — it
+  adopts that head. Don't refuse the trade: whether a token is legitimate is answered by the signed token
+  list and `verifyTokenListEntry`, not by whether the sequencer has seen it.
+- **Sequencer unreachable, or a definitive rejection** (`malformed`, `reserve-mismatch`) → build against
+  the node and submit directly. The covenant enforces price, fees and your minimum output on-chain.
+- **`409` with `retry: true`** (`stale-head`, `full`) → rebuild on a fresh head and resubmit, a few times
+  (KRON uses 3). If it is still busy, tell the user the market is busy rather than going direct: a direct
+  build against the confirmed head would orphan against the chain in flight. Make each rebuild reuse at
+  least one funding input from the attempt it replaces, so at most one of them can ever land.
+- **`ambiguous`, or a lost response** → never go direct and never rebuild until `status()` /
+  `curveStatus()` or the chain resolves it (see §6).
 
 ---
 

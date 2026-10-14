@@ -59,15 +59,25 @@ export function materializeKcc20Script(tpl: Kcc20Template, state: Kcc20State): U
   return out;
 }
 
+/** The compute-mass ceiling on the bonding curve: the curve_cp redeem is revealed in every spend and is heavier
+ *  than the pool's, so a curve trade carrying 3 trader token pieces measures ~510k compute mass (a 3-input
+ *  sell observed on-chain: 509,739) — over the 500k consensus cap — while 2 sit near 430k. Applies to curve
+ *  sells (seller pieces) and curve buys (`mergeTokens`). Pool trades are bounded by `maxIns − 1` alone. */
+export const MAX_CURVE_TRADER_TOKEN_INPUTS = 2;
+
 /** kcc20 caps a tx at `maxIns` inputs of one token covenant, and a curve/pool trade always spends one of
  *  them itself (the curve inventory or the pool reserve). So a single trade can carry at most
- *  `maxIns − 1` of the trader's own token pieces — 3 on every KRON schema. Throws at build time instead
- *  of a `script ran, but verification failed` rejection at submit. Compute mass can bind earlier on a
- *  large tx. */
-export function assertTraderTokenInputs(tpl: Kcc20Template, count: number, builder: string): void {
-  const max = tpl.maxIns - 1;
+ *  `maxIns − 1` of the trader's own token pieces — 3 on every KRON schema. `massCap` tightens that where
+ *  compute mass binds first: curve builders pass `MAX_CURVE_TRADER_TOKEN_INPUTS` (2). Throws at build time
+ *  instead of a rejection at submit. */
+export function assertTraderTokenInputs(tpl: Kcc20Template, count: number, builder: string, massCap = Infinity): void {
+  const kcc20Max = tpl.maxIns - 1;
+  const max = Math.min(kcc20Max, massCap);
   if (count > max) {
-    throw new Error(`${builder}: ${count} trader token inputs exceeds the token's limit of ${max} per trade (maxIns ${tpl.maxIns}, one slot is the curve inventory / pool reserve) — split across trades`);
+    const why = max < kcc20Max
+      ? `compute mass: ${count} pieces exceed the 500k consensus cap on this covenant`
+      : `maxIns ${tpl.maxIns}, one slot is the curve inventory / pool reserve`;
+    throw new Error(`${builder}: ${count} trader token inputs exceeds the limit of ${max} per trade (${why}) — consolidate first, or split across trades`);
   }
 }
 
@@ -85,7 +95,7 @@ export function assertTraderTokenInputs(tpl: Kcc20Template, count: number, build
  * of 4 under-reports those. The authoritative values are `token.maxIns`/`token.maxOuts` from
  * `fetchCpTemplates`. The splice itself uses only `script` + `stateStart`; trade builders read
  * `maxIns` to cap how many of the trader's token pieces one trade can carry (see
- * `assertTraderTokenInputs`).
+ * `assertTraderTokenInputs`; curve trades are capped lower, at 2, by compute mass).
  */
 export function decodeKcc20Redeem(redeem: Uint8Array, opts: { maxIns?: number; maxOuts?: number } = {}): { template: Kcc20Template; state: Kcc20State } {
   const hits: number[] = [];

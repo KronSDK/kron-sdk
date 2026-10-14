@@ -86,8 +86,18 @@ export class SequencerClient {
   }
 
   /** The in-flight curve head + queue depth for a pre-graduation token, keyed by its curve covenant id
-   *  (hex). `head: null` with `ok: true` means no chain is in flight — build against the confirmed state
-   *  from the node/indexer instead. A `{ok:false}` gate (unknown/full/unreachable) → submit direct. */
+   *  (hex). `head: null` with `ok: true` means no chain is in flight — the normal state for any idle curve,
+   *  and for every curve right after a sequencer restart. It does NOT mean the curve is unknown or untradeable:
+   *  build against the node's live curve UTXO and submit HERE anyway (the sequencer adopts that head). Whether
+   *  a curve is legitimate is a token-list question (`verifyTokenListEntry`), never a sequencer one.
+   *
+   *  Fallback policy (what KRON's own web client does):
+   *  - sequencer unreachable (this throws / HTTP error), or a definitive submit rejection (malformed,
+   *    reserve-mismatch) → build against the node and submit directly; the covenant enforces everything.
+   *  - submit `409` with `retry: true` (`stale-head`, `full`) → rebuild on a fresh head, a few times; then
+   *    show "market busy" rather than going direct (a direct build would orphan against the in-flight chain).
+   *    Make each rebuild share at least one funding input with the attempt it replaces, so at most one lands.
+   *  - `ambiguous` or a lost response → never direct, never rebuild: reconcile via `curveStatus()`. */
   async curveHead(curveCovid: string): Promise<CurveHeadResult> {
     const res = await fetch(`${this.baseUrl}/curve/head?covid=${encodeURIComponent(curveCovid)}`);
     if (!res.ok && res.status !== 409) throw new Error(`sequencer curve head -> HTTP ${res.status}`);

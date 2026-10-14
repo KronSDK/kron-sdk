@@ -3,6 +3,31 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.19.2
+
+### Corrected — curve trades carry at most 2 trader token pieces, not 3
+
+0.19.0 capped every trade at `maxIns − 1` = 3 of the trader's token UTXOs. That is the kcc20 limit, but on
+the bonding curve compute mass binds first: the curve_cp redeem is heavier than the pool's, and a 3-piece
+curve sell measures ~510k compute mass (509,739 observed on-chain), over the 500k consensus cap, so the
+node rejects it. KRON's own web client has always capped curve trades at 2.
+
+- `buildCpSell` (seller pieces) and `buildCpBuy` (`mergeTokens`) now throw past **2**
+  (`kcc20.MAX_CURVE_TRADER_TOKEN_INPUTS`). Pool builders keep the kcc20 limit of 3.
+- `assertTraderTokenInputs` takes an optional fourth argument, a tighter cap for covenants where compute mass
+  binds before kcc20 does.
+
+### Docs
+
+- `curveHead()` and `docs/INTEGRATION.md` no longer describe `{ ok: false }` as an "unknown curve" gate. The
+  sequencer answers any idle curve — and every curve after a restart — with `ok: true, head: null`, which
+  means "build on the node's live head and submit here", not "untradeable". The fallback policy KRON's own
+  client uses is now written out: direct submission when the sequencer is unreachable or rejects
+  definitively; rebuild a few times on `retry: true`, then report "busy" rather than going direct; never go
+  direct or rebuild on an ambiguous result; reuse a funding input when rebuilding so at most one attempt lands.
+
+No transaction bytes changed; `verify:parity` is byte-identical.
+
 ## 0.19.1
 
 ### Corrected — the retry guidance shipped in 0.19.0 was unsafe through the sequencer

@@ -35,6 +35,7 @@ import {
   pushKcc20StateScalar,
   transferSigScript,
   assertTraderTokenInputs,
+  MAX_CURVE_TRADER_TOKEN_INPUTS,
 } from './kcc20Tx.js';
 import { genesisCovenantId, covidToBytes } from './genesis.js';
 import { resolveRecipientBound } from './abiGuard.js';
@@ -172,7 +173,7 @@ export function buildCpBuy(
   // Merge tokens are presence-owned: their kcc20 witness MUST be a co-present signed P2PK funding input.
   // Input 0 is the curve covenant (no signature), so the default 0 would fail the on-chain presence check.
   if (mergeTokens.length > 0 && presenceWitnessIdx === 0) throw new Error('presenceWitnessIdx must be set to a co-present signed P2PK funding input when mergeTokens is non-empty (input 0 is the curve covenant and carries no signature)');
-  assertTraderTokenInputs(tokenTpl, mergeTokens.length, 'buildCpBuy');
+  assertTraderTokenInputs(tokenTpl, mergeTokens.length, 'buildCpBuy', MAX_CURVE_TRADER_TOKEN_INPUTS);
   // An UNSET discriminator silently selects the legacy ABI — right for legacy schemas, a guaranteed
   // "pick at an invalid location" rejection on a recipient-bound one. Warn once; see ./abiGuard.ts.
   resolveRecipientBound(tpl.recipientBound, 'buildCpBuy', 'tradeRecipientBound');
@@ -248,7 +249,7 @@ export function buildCpSell(
 ): CovenantSpend {
   if (utxo.state.graduated) throw new Error('curve has graduated — sells are locked');
   if (sellerTokens.length < 1) throw new Error('need at least one seller token');
-  assertTraderTokenInputs(tokenTpl, sellerTokens.length, 'buildCpSell');
+  assertTraderTokenInputs(tokenTpl, sellerTokens.length, 'buildCpSell', MAX_CURVE_TRADER_TOKEN_INPUTS);
   if (tokenIn <= 0n) throw new Error('tokenIn must be positive');
   // HLK-L05: a full drain (kasOut == realKas) would emit a zero-value curve output, which Kaspa consensus
   // rejects (TxOutZero) on EVERY schema — so the `>=` guard is unconditional, not schema-gated.
