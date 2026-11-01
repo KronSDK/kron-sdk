@@ -1,7 +1,7 @@
 {
   "name": "@kronsdk/kron-sdk",
-  "version": "0.19.2",
-  "description": "Build, sign, and submit transactions against KRON's native-L1 Kaspa covenants (bonding curve + AMM pool) from any JS/TS environment — browser or Node. Reference SDK for wallet and dApp integrators.",
+  "version": "0.20.0",
+  "description": "Build, sign, and submit transactions against KRON's native-L1 Kaspa covenants (bonding curve + AMM pool) from any JS/TS environment \u2014 browser or Node. Reference SDK for wallet and dApp integrators.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -31,10 +31,14 @@
     "test": "vitest run",
     "smoke": "node scripts/smoke-test-node-wasm.mjs",
     "verify:parity": "node scripts/verify-parity.mjs",
-    "prepublishOnly": "npm run build && npm test && npm run verify:parity"
+    "verify:parity:v1": "node scripts/verify-parity-v1.mjs",
+    "prepublishOnly": "npm run build && npm test && npm run verify:parity && npm run verify:parity:v1"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.2.0"
   },
   "devDependencies": {
     "@types/node": "^26.0.1",
@@ -56,6 +60,8 @@
     "silverscript",
     "kcc20",
     "wallet",
-    "dex"
+    "dex",
+    "kcc-0020",
+    "standard-token"
   ]
 }

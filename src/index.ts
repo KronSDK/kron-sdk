@@ -34,6 +34,30 @@ export * as poolCp from './native/poolCpTx.js';
 export * as poolCpV3 from './native/poolCpV3Tx.js';
 export * as vesting from './native/vestingTx.js';
 
+// --- 0.20: the KCC-20 STANDARD family (`kcc20v1`) ----------------------------------------------------------------
+// A second token family beside the audited one above (registry `cp.family === 'kcc20v1'`; tokenlist `extensions.family`).
+// The token program is the KCC-20 reference program (KCC-1 ABI: 4-byte BLAKE3 dispatch tags, explicit data pushes,
+// BLAKE3 template hashes — `dispatchTag` / `templatesV1`), with KRON's curve / pool / order companion programs. Nothing
+// here changes the audited builders or their bytes; a 0.19.x consumer is unaffected. Templates come from
+// `client.fetchFamilyTemplates` (POST /api/native/kcc20v1-template, every KCC-1 template hash recomputed from the bytes);
+// a token UTXO's redeem decodes with `kcc20V1.decodeKcc20V1State`. Wallet signing goes through `spendV1` (KCC-12 §6.7
+// `signInputs` preferred, `signPskt` sign-and-extract otherwise), and `spendV1.assertSighashAllV1` checks the result.
+// NOT audited: the family is pre-audit (kron docs/kcc20v1/AUDIT-SCOPE-KCC20V1.md).
+export * as dispatchTag from './native/dispatchTag.js';
+export * as templatesV1 from './native/templatesV1.js';
+export * as l1Fee from './native/l1Fee.js';
+export * as transactionIntent from './native/transactionIntent.js';
+export * as kcc20V1 from './native/kcc20V1Tx.js';
+export * as covenantV1 from './native/covenantTxKcc20V1.js';
+export * as curveKcc20 from './native/curveKcc20Tx.js';
+export * as poolKcc20 from './native/poolKcc20Tx.js';
+export * as orderKcc20 from './native/orderKcc20Tx.js';
+export * as transferKcc20 from './native/transferKcc20Tx.js';
+export * as spendV1 from './native/spendV1.js';
+/** The G0.3 wallet signing matrix: drive a connected wallet through the family's four signing shapes over fake outpoints
+ *  and get the `KRON-WALLET-MATRIX-1` record back (`walletMatrix.runWalletMatrix`). For wallet developers; testnet only. */
+export * as walletMatrix from './walletMatrix/walletMatrix.js';
+
 export * as wallet from './wallet/index.js';
 export * as client from './client/index.js';
 export * as verify from './verify/index.js';

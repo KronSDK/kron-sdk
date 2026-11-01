@@ -35,6 +35,11 @@ export type RegistryToken = {
   description?: string; image?: string;
   links?: { website?: string; x?: string; telegram?: string };
   cp: {
+    /** 0.20: the token family. Absent = KRON's audited CP family (every token before 2026-10; `curveCp` / `poolCpV3` /
+     *  `kcc20` builders, `fetchCpTemplates`). `'kcc20v1'` = a KCC-20 STANDARD token (the reference token program with
+     *  KRON's curve / pool / order companions; NOT the audited family): use `curveKcc20` / `poolKcc20` / `orderKcc20` /
+     *  `transferKcc20` with `fetchFamilyTemplates`, sign through `spendV1`. Server-validated at registration. */
+    family?: 'kcc20v1';
     curveParams: CpCurveParamsRecord;
     templateVersion?: TemplateVersionRecord | null; // covenant version pin (server-stamped)
     tokenCovid?: string; curveCovid?: string; poolCovid?: string; genesisTxid?: string;
@@ -69,6 +74,13 @@ export type TokenListEntry = {
     templateVersion: TemplateVersionRecord | null;
     graduated: boolean;
     chainVerified: boolean;
+    /** 0.20, ADDITIVE and present ONLY on KCC-20 standard-family entries (`family: 'kcc20v1'`): the standard the token
+     *  program conforms to (`standard.kcc` = 'KCC-20', the KCCs commit, the token program's KCC-1 template hash) and
+     *  the KRON-scoped artifact document. An audited CP entry is byte-identical to 0.19.x, and the signed token-list
+     *  messages are unchanged — `verify.verifyTokenListSignature` keeps working on both. */
+    family?: 'kcc20v1';
+    standard?: { kcc: 'KCC-20'; specCommit: string | null; templateHash: string };
+    artifactURI?: string;
   };
 };
 

@@ -188,6 +188,10 @@ the trader's own inputs, and the tx's change output shrinks accordingly.
 - **Fetch clients**: `RegistryClient` (token params/metadata) and `IndexerClient` (live state, UTXOs)
   in the SDK.
 - **Quote helpers**: `curveCp` quote fns and `poolCpV3.quotePoolV3Buy/Sell` for pricing before you build.
+- **KCC-20 standard-family tokens** (0.20; registry `cp.family === 'kcc20v1'`): a different builder set —
+  `curveKcc20` / `poolKcc20` / `orderKcc20` / `transferKcc20`, templates from `client.fetchFamilyTemplates`,
+  signing through `spendV1`. The flows above do not apply to them; see
+  [INTEGRATION.md § KCC-20 standard-family tokens](INTEGRATION.md#kcc-20-standard-family-tokens-cpfamily--kcc20v1--020).
 - The README **Quickstart — quote a curve buy** is the smallest working starting point.
 
 ## Two gotchas that trip everyone up

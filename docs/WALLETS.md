@@ -22,6 +22,18 @@ needs to expose
   co-present signed P2PK input at the owner's address. This is what makes KRON work with a wallet that has
   never heard of KRON: the wallet only ever signs a plain P2PK input, the same primitive it already
   supports for a normal send.
+- `signInputs(txJsonString, inputs)` — **optional, 0.20, KCC-12 §6.7 `kaspa_signInputs`.** Sign the listed
+  inputs with the account that owns each entry's `address` and return **raw 64-byte Schnorr signatures**
+  (positional hex strings or `{index, signature}` records) without composing any script — the dApp composes the
+  covenant witness. This exists for the **KCC-20 standard family**: a holder's token piece there is a P2SH
+  covenant input whose witness carries the holder's own 65-byte SIGHASH_ALL signature, so the wallet has to
+  sign a P2SH input with the account key, which `signPskt` sign-and-extract may or may not do. Refuse an
+  `address` that is not an authorized account (code 4100) and a `sighashType` other than 0x01 (-32602).
+- `covenantInputSigning` — **optional, 0.20.** How you handle a covenant (P2SH token) input you are asked to
+  sign: `'signInputs'` (you implement the method above), `'proven'` (your `signPskt` signs P2SH inputs with the
+  account key and you have run the acceptance test on a test network), `'unproven'` (the default when absent —
+  the dApp asks the user before trying), `'refused'` (you decline covenant inputs; dApps fail closed before any
+  prompt). Report it honestly: a wrong `'proven'` means a user approves a transaction the chain then rejects.
 - `getXOnlyPublicKey()` / `signMessage()` — optional but recommended. Used for setting a token's
   creator-fee-owner at deploy time, and for authenticating signed writes to KRON's metadata registry
   (display name/image/links) via the [KIP-5](https://github.com/kaspanet/kips/blob/master/kip-0005.md)
@@ -114,7 +126,9 @@ announceKaspaWallet(
 `provider` is deliberately **KasWare-shaped** (the de-facto injected API): `requestAccounts()` is the
 only mandatory method; `getAccounts`, `getNetwork`/`switchNetwork`, `getPublicKey`, `signMessage`,
 `signPskt({ txJsonString, options: { signInputs } })`, `disconnect`, and `on/removeListener` are all
-optional and capability-checked by dApps. A wallet that only implements `requestAccounts` still shows up
+optional and capability-checked by dApps. 0.20 adds the optional KCC-12 §6.7 `signInputs({ txJsonString,
+signInputs: [{ index, address, sighashType }] })` → raw 64-byte signatures (see "The contract" above) — list it
+as `kaspa:signInputs` in `methods` when you serve it. A wallet that only implements `requestAccounts` still shows up
 and connects — KRON just disables trading/comments until the corresponding methods exist. Canonical
 network ids (KIP-12 canonical, the node's own): `mainnet`, `testnet-10`, `testnet-11`, `devnet`.
 

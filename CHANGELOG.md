@@ -3,6 +3,54 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.20.0
+
+### Added — the KCC-20 STANDARD token family (`kcc20v1`)
+
+KRON now launches a second kind of token beside the audited KRON token: a **KCC-20 standard token** — the KCC-20
+reference token program byte-for-byte (KCC-1 ABI) with KRON's `curve_kcc20` / `pool_kcc20` / `order_kcc20`
+companion programs. Everything is additive; the audited builders and their bytes are untouched.
+
+- **Namespaces:** `kcc20V1` (state codec, owner witnesses, P2SH addresses, transfer scripts,
+  `decodeKcc20V1State`), `curveKcc20` (init / buy / sell / graduate / batchBuy), `poolKcc20` (swaps, add /
+  remove liquidity, bindLp, quotes), `orderKcc20` (refundable buy orders), `transferKcc20`, `covenantV1`
+  (`assembleFamilyTx`, fees, mass, `assertInvocationsV1`), `spendV1` (the wallet bridge), `templatesV1`
+  (`compiledFromServerV1` / `familyFromServerV1`, KCC-1 `templateHashV1`), `dispatchTag` (KCC-1 §3.5.1 tags,
+  the family's entry signatures), `l1Fee`, `transactionIntent`. Ported from KRON's production code;
+  `npm run verify:parity:v1` proves them byte-identical to the reference over 17 production shapes.
+- **`client.fetchFamilyTemplates` / `shapeFamilyTemplates`** — `POST /api/native/kcc20v1-template`, every KCC-1
+  template hash recomputed from the bytes and every compiled dispatch tag checked against the entry signature
+  the builders encode for; `familyCurveParamsV1` / `familyPoolParamsV1` / `familyCompileBodyV1`.
+- **Wallet surface (KCC-12 §6.7):** optional `WalletAdapter.signInputs` (raw 64-byte signatures; the SDK
+  composes the covenant witness) and `WalletAdapter.covenantInputSigning: 'signInputs' | 'proven' | 'unproven' |
+  'refused'`; `WalletCapabilities.signInputs?`; `KaspaProvider.signInputs?` + `KaspaSignInputV1` in discovery.
+  `spendV1.signWithWalletV1` prefers `signInputs`, falls back to `signPskt` sign-and-extract with the answer
+  checked AS RETURNED, refuses a `'refused'` adapter before any prompt.
+- **`spendV1.assertSighashAllV1(signedTx, asm)`** — every wallet-produced signature (P2PK funding scripts, token
+  leader / delegator witnesses) ends in 0x01; run it before submitting.
+- **`walletMatrix`** — the wallet signing matrix for wallet developers, ported from KRON's testnet page
+  `/dev/wallet-matrix`. `runWalletMatrix(k, adapter, { network, build })` builds the four family signing shapes
+  (transfer 1 piece, transfer 2 pieces, sell 2 pieces + change, buy 1 merge) over fake outpoints with bundled
+  reference programs, signs them through `spendV1.signWithWalletV1` and returns the page's `KRON-WALLET-MATRIX-1`
+  record. Also `buildWalletMatrixShapes`, `referenceTemplatesV1`, `withApprovalScreens`,
+  `formatWalletMatrixRecord`. Testnet only (mainnet is refused). Example: `examples/wallet-matrix.ts`; README
+  "Wallet developers: prove your signing path".
+- **Types:** `RegistryToken.cp.family?: 'kcc20v1'`; `TokenListEntry.extensions.family? / standard? /
+  artifactURI?` (additive — an audited entry is unchanged, and the signed token-list messages are unchanged).
+- **Dependency:** `@noble/hashes` (BLAKE3 for KCC-1 dispatch tags and template hashes) — the package's first
+  runtime dependency.
+- **Tests & fixtures:** the official KCC-1 / KCC-20 conformance vectors (`src/native/__fixtures__/kccs`) and the
+  four programs silverc v1.0.0 compiles for the test params (`kcc20v1-templates.json`, written by
+  `verify-parity-v1.mjs --write-fixture`); 40 new tests over the codec, the template adapter, every production
+  shape on the vendored WASM and both wallet paths with tampered answers.
+
+### Unchanged
+
+No audited transaction bytes changed; `verify:parity` is byte-identical. `src/verify/tokenList.ts` is
+byte-identical (KRON pins it). Every 0.19.2 export is still present with the same signature; a 0.19.x consumer
+compiles and behaves unchanged. The standard family is **not audited** (pre-audit) and its mainnet rollout is
+gated by KRON's registry.
+
 ## 0.19.2
 
 ### Corrected — curve trades carry at most 2 trader token pieces, not 3

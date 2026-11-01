@@ -4,7 +4,7 @@
 — a bonding-curve launchpad + AMM DEX — from any JS/TS environment.** Browser or Node. No custody, ever:
 this package only *builds* transactions; a wallet (yours, or your user's) signs them.
 
-> **Status: v0.19.2, mainnet.** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.20.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract (which is
 > [KIP-12](https://github.com/kaspanet/kips/pull/44)) and how to adapt it to a specific wallet's injected
@@ -111,7 +111,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.19.2      # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.20.0      # or pin an exact version for reproducible builds
 ```
 
 The package follows semver — **just install `@latest`**; there's no reason to pin an older release. The token-list client (`client.RegistryClient.tokenlist()`) and on-chain verifier
@@ -275,6 +275,18 @@ kron-sdk
 ├─ client             typed REST clients (indexer, registry incl. tokenlist(), sequencer)
 │                     + fetchCpTemplates / shapeCpTemplates
 ├─ verify             verify a token-list entry against the chain (anti-spoof, fetcher-injected)
+├─ ── KCC-20 STANDARD family (0.20, `cp.family === 'kcc20v1'`; see the next section) ──
+├─ kcc20V1            the KCC-20 reference token program: state codec, owner witnesses, P2SH addresses, transfer scripts
+├─ curveKcc20         curve_kcc20 builders: init / buy / sell / graduate / batchBuy
+├─ poolKcc20          pool_kcc20 builders: swapKasForToken / swapTokenForKas / addLiquidity / removeLiquidity / bindLp
+├─ orderKcc20         order_kcc20 (refundable buy orders): escrow maths, refund
+├─ transferKcc20      holder-to-holder transfers of standard tokens (1–2 pieces, change)
+├─ covenantV1         v1 assembly for the family (bindings, compute budgets, mass, fees, the invocation check)
+├─ spendV1            the family's wallet bridge: KCC-12 §6.7 signInputs or signPskt sign-and-extract, + assertSighashAllV1
+├─ templatesV1        the compiled-template shape + the server-answer adapter (KCC-1 template hashes recomputed)
+├─ dispatchTag        KCC-1 dispatch tags (blake3(signature)[0..4]) and the family's entry signatures
+├─ l1Fee / transactionIntent   mass → fee helpers; canonical tx JSON + the signed-intent check
+├─ walletMatrix       for wallet developers: dry-run your wallet through the family's four signing shapes (testnet)
 └─ /wasm              loadKaspa() — the only environment-specific (Node vs browser) export
 ```
 
@@ -294,6 +306,107 @@ that.
 
 Full guide: [`docs/INTEGRATION.md`](docs/INTEGRATION.md). Wallet-adapter contract:
 [`docs/WALLETS.md`](docs/WALLETS.md).
+
+## KCC-20 standard tokens — the second family (0.20)
+
+KRON launches two kinds of token. Everything above this section is the **KRON token**: KRON's own audited
+covenant set (`kcc20` / `curveCp` / `poolCpV3`), the family every token launched before the standard existed
+belongs to. The `kcc20` namespace is named after that covenant, which predates the KCC-20 standard — **a KRON
+token is not a KCC-20 standard token**, and other KCC-20 software does not read it.
+
+Since 0.20 the SDK also builds for the **KCC-20 standard family** (`kcc20v1`): the token program is the
+[KCC-20](https://github.com/kaspanet/kccs) reference program byte-for-byte (KCC-1 ABI: 4-byte BLAKE3 dispatch
+tags, explicit data pushes, BLAKE3 template hashes), with KRON's curve / pool / order companion programs around
+it. Such a token is a standard token any KCC-20 wallet or explorer can read; its curve and pool are KRON's.
+
+- **Telling them apart.** A registry record carries `cp.family === 'kcc20v1'`; a token-list entry carries
+  `extensions.family`, `extensions.standard { kcc, specCommit, templateHash }` and `extensions.artifactURI`
+  (additive — an audited entry is byte-identical to before, and the signed token-list messages are unchanged).
+  Absent = KRON token. **Never feed one family's UTXOs or templates to the other family's builders**: the
+  families share nothing on-chain, and the builders refuse a template whose compiled dispatch tags disagree
+  with the entry signatures they encode for.
+- **Templates:** `client.fetchFamilyTemplates({ baseUrl, tokenCovid, curveParams, templateVersion })` →
+  `POST /api/native/kcc20v1-template`, every KCC-1 template hash recomputed from the bytes
+  (`templatesV1.compiledFromServerV1`), shaped for the builders. A holder's token UTXO decodes with
+  `kcc20V1.decodeKcc20V1State(redeemScriptHex)`. Templates are static per token: fetch once.
+- **Signing differs — read this.** In the KRON family the wallet only ever signs plain P2PK inputs. In the
+  standard family the holder's token pieces are **P2SH covenant inputs whose witness carries the holder's own
+  65-byte SIGHASH_ALL signature**, so the wallet must sign a P2SH input with the account key. `spendV1`
+  does this in the KCC-12 order: `kaspa_signInputs` (§6.7: raw 64-byte signatures; the SDK composes the
+  scripts) when the adapter has `signInputs`, else `signPskt` sign-and-extract with the answer checked as
+  returned; every path ends in `assertSighashAllV1`. Wallet adapters declare how they handle covenant inputs
+  with `covenantInputSigning: 'signInputs' | 'proven' | 'unproven' | 'refused'` — see
+  [docs/WALLETS.md](docs/WALLETS.md).
+- **Bounds are the covenants' bounds:** at most 2 of the holder's pieces per trade, transfer or merge
+  (`MAX_SELL_PIECES`, `MAX_MERGE_PIECES`, `MAX_TRADER_PIECES`, `MAX_TRANSFER_PIECES`), 2 orders per batch.
+- **Not audited.** The standard family is pre-audit (KRON publishes its audit scope and findings ledger in the
+  kron repo); the KRON family above is the audited one. KRON's mainnet rollout gate for the family is KRON's call,
+  not this package's — check the registry's pre-flight before building against mainnet.
+
+`verify:parity:v1` proves these builders byte-identical to KRON's reference builders over every production
+shape (17 shapes, 300+ checks), the same way `verify:parity` does for the KRON family. Full recipe:
+[docs/INTEGRATION.md § KCC-20 standard-family tokens](docs/INTEGRATION.md#kcc-20-standard-family-tokens-cpfamily--kcc20v1--020).
+
+## Wallet developers: prove your signing path
+
+A KCC-20 standard-family spend asks the wallet to sign the holder's token pieces, which are **P2SH covenant
+inputs**, beside its ordinary P2PK funding input. `walletMatrix` lets you check, in your own browser and with
+your own build, that your wallet does this correctly. It is the same dry run KRON runs on its testnet developer
+page.
+
+**What it proves.** The matrix builds the four signing shapes the family uses and asks your wallet to sign
+each one's listed inputs. Each answer goes through the checks the KRON dApp runs before it would broadcast
+(`spendV1.signWithWalletV1`):
+
+- **`signPskt` sign-and-extract:** only the requested inputs changed, and each one, token inputs included, now
+  holds the canonical 66-byte script `0x41 ‖ sig64 ‖ 0x01`.
+- **`kaspa_signInputs` (KCC-12 §6.7):** one raw 64-byte signature per requested input, or 65 bytes ending
+  0x01. The matrix uses this path whenever your adapter has `signInputs`.
+- **After the splice:** the signed transaction equals the assembled one except for the requested signatures.
+
+A shape your wallet refuses, or answers with anything else, is recorded as an error with the reason. The run
+then goes on to the next shape.
+
+| shape | inputs your wallet signs |
+|---|---|
+| transfer (1 piece) | 1 token (P2SH) + 1 funding (P2PK) |
+| transfer (2 pieces) | 2 token + 1 funding |
+| sell (2 pieces + change) | 2 token + 1 funding |
+| buy (1 merge) | 1 token + 1 funding |
+
+**What it does not prove.** Every transaction spends **fake outpoints**, so nothing your wallet signs can be
+broadcast. Node acceptance is a separate testnet run with real UTXOs.
+
+**What you need.** A wallet on **testnet-10** with one account; no funds, because nothing is spent. Mainnet is
+refused. The wallet must return the account's x-only public key, and the address must be that key's P2PK
+address. The shapes use bundled reference programs, so no KRON server and no compiler are needed. They have
+the same sizes and mass as the programs KRON's page compiles; only the creator-fee output pays a fixed test key.
+
+```ts
+import { walletMatrix } from '@kronsdk/kron-sdk';
+import { loadKaspa } from '@kronsdk/kron-sdk/wasm';
+
+const k = await loadKaspa();
+await adapter.connect(); // your WalletAdapter: getAddress, getXOnlyPublicKey, signPskt and/or signInputs
+const record = await walletMatrix.runWalletMatrix(k, adapter, { network: 'testnet-10', build: 'MyWallet 1.4.2 (3f9c2e1)' });
+console.log(walletMatrix.formatWalletMatrixRecord(record));
+```
+
+[`examples/wallet-matrix.ts`](examples/wallet-matrix.ts) is a complete browser page module. It finds your
+wallet through KIP-12 discovery, wraps it in a `WalletAdapter`, runs the four shapes and prints the record.
+`onProgress` tells you which shape each approval prompt belongs to.
+
+**What to send back.**
+
+1. **The record**: the `KRON-WALLET-MATRIX-1` JSON, failures included. Per shape it holds the status, the
+   path taken, how many inputs were requested and the error text. It also holds the time, the mass, and what
+   the wallet returned per input as byte length and trailing byte. It never contains signature bytes.
+2. **The approval screen**: what your wallet showed for each of the four requests. Add it to the record with
+   `walletMatrix.withApprovalScreens(record, { 'transfer (1 piece)': '…', … })` or send it beside the record.
+
+Other exports: `buildWalletMatrixShapes` returns the four assembled shapes without signing them,
+`referenceTemplatesV1` returns the bundled programs, and the `templates` option builds over other programs,
+for example from `client.fetchFamilyTemplates`.
 
 ## Verification
 
@@ -390,7 +503,9 @@ Costs ~0.00003 KAS per trade; no covenant logic is touched. Full details:
   `client.fetchCpTemplates`, which returns `{ token, pool, curve }` already hydrated. The dangerous shape is
   a hand-built template that *does* carry params but no `recipientBound`: it type-checks, and on a
   recipient-bound token the covenant rejects it. This package can build transactions against existing KRON
-  tokens; it can't compile or deploy a new curve/pool/token.
+  tokens; it can't compile or deploy a new curve/pool/token. The KCC-20 standard family (0.20) follows the same
+  rule through `client.fetchFamilyTemplates`, whose answer carries no compiled flag to miss: the four programs
+  are verified by recomputing their KCC-1 template hashes and dispatch tags from the bytes.
 
 ## License
 

@@ -17,6 +17,9 @@ export type WalletCapabilities = {
   getXOnlyPublicKey: boolean;
   signMessage: boolean;
   reconnect: boolean;
+  /** 0.20: the wallet implements KCC-12 §6.7 `kaspa_signInputs` (see `signInputs`). Optional so 0.19.x adapters, which never
+   *  report it, still type-check; absent reads as false. */
+  signInputs?: boolean;
 };
 
 export interface WalletAdapter {
@@ -46,6 +49,19 @@ export interface WalletAdapter {
    *  verbatim in their trade gates. Absent = a missing signPskt means the wallet genuinely lacks the
    *  capability. */
   readonly signingGate?: string;
+  /**
+   * 0.20 (kcc20v1 — the KCC-20 standard family): KCC-12 §6.7 `kaspa_signInputs`. Sign the listed inputs of the tx (Safe JSON)
+   * with the account that owns `address` and return ONE RAW 64-byte Schnorr signature hex per requested input (positional,
+   * or `{index, signature}` records), `sighashType` SIGHASH_ALL (0x01) unless stated. The dApp composes the signature
+   * scripts itself (`spendV1.applyWalletSignaturesV1`), so a wallet that cannot sign a P2SH (covenant) input through
+   * `signPskt` can still sign the family's token inputs here. Optional; `spendV1.signWithWalletV1` prefers it over `signPskt`.
+   */
+  signInputs?(txJsonString: string, inputs: { index: number; address: string; sighashType?: number }[]): Promise<{ index: number; signature: string }[] | string[]>;
+  /** 0.20: how this wallet handles a covenant (P2SH token) input it is asked to sign. 'signInputs' = native kaspa_signInputs;
+   *  'proven' = signPskt signs P2SH inputs with the account key (verified on a test network); 'unproven' = signPskt exists but
+   *  P2SH signing is not demonstrated (the default when absent — the dApp asks the user before trying, KRON D21);
+   *  'refused' = the wallet declines covenant inputs, so `spendV1.signWithWalletV1` fails closed before any prompt. */
+  readonly covenantInputSigning?: 'proven' | 'unproven' | 'refused' | 'signInputs';
   /** The connected account's 32-byte x-only pubkey hex (the curve/pool fee owner at deploy, or a
    *  presence-owned token's owner identifier). null if unavailable. */
   getXOnlyPublicKey?(): Promise<string | null>;

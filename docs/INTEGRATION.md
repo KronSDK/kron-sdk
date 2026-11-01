@@ -459,6 +459,63 @@ sender's co-present P2PK funding input), assemble + sign + submit.
 Lower-level pieces if you need custom shapes: `transferSigScript` (the raw signature script),
 `kron.curveCp.buildSplitToken` / `buildConsolidate` (same-owner split/merge).
 
+### KCC-20 standard-family tokens (`cp.family === 'kcc20v1'`) — 0.20
+
+Everything above in §5 is the **KRON token** family (KRON's audited covenants). A registry record with
+`cp.family === 'kcc20v1'` (token-list entry: `extensions.family`, `extensions.standard`, `extensions.artifactURI`)
+is a **KCC-20 standard token**: the KCC-20 reference token program with KRON's `curve_kcc20` / `pool_kcc20` /
+`order_kcc20` companions. Same read API, same identifiers (`covenantId` = covid A), same submit path — different
+builders, templates and signing. Decide by the record's family **first**; nothing is shared on-chain, and the
+family builders refuse a template whose compiled dispatch tags disagree with the entry signatures they encode.
+
+1. **Templates** (static per token — fetch once):
+   ```ts
+   const rec = await reg.token('ghost');
+   if (rec.cp.family !== 'kcc20v1') { /* KRON token — use fetchCpTemplates + curveCp / poolCpV3 */ }
+   const t = await kron.client.fetchFamilyTemplates({ baseUrl: API, tokenCovid: rec.cp.tokenCovid, curveParams: rec.cp.curveParams, templateVersion: rec.cp.templateVersion ?? null });
+   // t.token / t.curve / t.pool / t.order — every KCC-1 template hash recomputed from the bytes; t.bytes = revealed sizes
+   ```
+2. **Live state.** Curve: `SequencerClient.curveHead(curveCovid)` / the indexer token record (`realKas`,
+   `tokenReserve`, `graduated`), exactly as for a KRON token. Pool: `IndexerClient.poolhead`. A holder's pieces:
+   `GET /v1/kcc20/token/{tick}/address/{address}/utxos` — each row carries `family: 'kcc20v1'` and its
+   `redeemScriptHex`; `kron.kcc20V1.decodeKcc20V1State(redeem)` → `{ templateHash, state }`, and the state's
+   P2SH must equal the row's script (`kcc20V1.kcc20V1SpkForState`). Only `ownerScheme` 0 (p2pk-schnorr) and
+   1 (p2pkh-schnorr) pieces of the connected key are spendable here.
+3. **Build** (every builder takes `k`, the template, the covenant UTXO, the covenant id and the holder's x-only key;
+   pass `{ blake3 }` from `@noble/hashes/blake3.js` when the holder's pieces may be p2pkh-owned):
+
+   | action | builder | notes |
+   |---|---|---|
+   | curve buy / sell | `curveKcc20.buildCurveV1Buy` / `buildCurveV1Sell` | ≤ 2 of the holder's pieces merged / sold (`MAX_MERGE_PIECES`, `MAX_SELL_PIECES`); sells return one change piece |
+   | graduate | `curveKcc20.buildCurveV1Graduate` | needs `t.pool`; then `poolKcc20.buildPoolV1BindLp` once |
+   | batch orders | `orderKcc20.buildOrderV1Genesis` → `curveKcc20.buildCurveV1BatchBuy` (2 orders) / `orderKcc20.buildOrderV1Refund` | escrow = `orderKcc20.orderEscrowV1(kasIn, fees)` |
+   | swap | `poolKcc20.buildPoolV1SwapKasForToken` / `buildPoolV1SwapTokenForKas` | quotes: `poolKcc20.quotePoolV1Buy/Sell` |
+   | liquidity | `poolKcc20.buildPoolV1AddLiquidity` / `buildPoolV1RemoveLiquidity` | LP shares are the pool's own L token (covid `lpCovid`) |
+   | send | `transferKcc20.buildTokenTransferV1` | 1–2 pieces → recipient + change |
+
+   Every spend puts the covenant continuation at **input 0** and the holder's leader piece at input 1; the
+   builders return a `CovenantSpendV1` with the invocations pre-scripted and a 65-byte placeholder where the
+   holder's signature goes.
+4. **Assemble + fee:** `kron.covenantV1.assembleFamilyTx(k, { spend, fundingEntries, changeAddress, networkFee,
+   networkId })` (pass `networkId` — the wallet request needs each input's address), `covenantV1.feeForTxV1`
+   for the fee, then re-assemble with it (same rule as the KRON family: never sign the guess-fee assembly).
+   `covenantV1.massDimsV1` / `withinCapsV1` tell you before signing whether the shape fits the 500k caps.
+5. **Sign:** `kron.spendV1.signWithWalletV1(k, wallet, asm, spend, { networkId })`. The holder's token pieces
+   are **P2SH inputs the wallet must sign with the account key** (their witness carries the holder's 65-byte
+   SIGHASH_ALL signature) — unlike the KRON family, where the wallet never signs a covenant input. The SDK
+   prefers KCC-12 §6.7 `signInputs` (raw signatures; it composes the scripts itself), falls back to `signPskt`
+   sign-and-extract with the answer checked **as returned** (only the requested inputs changed, each a canonical
+   `41 ‖ sig64 ‖ 01`), refuses before any prompt when the adapter says `covenantInputSigning: 'refused'`, and
+   ends with `assertSighashAllV1`. Show `spendV1.confirmSummaryV1(spend)` (covenant inputs, which ones the
+   wallet signs, every leader's `next_states`) before prompting. A dev key signs with
+   `covenantV1.signFamilyTxV1(k, asm, spend, covenantV1.devKeySignerV1(k, privKey))`.
+6. **Submit** as in *Submitting* below. The sequencer dispatches by the registry record's family, so the
+   `/curve/submit` and `/submit` routes and their retry rules apply unchanged.
+
+This family is **not audited** (pre-audit; KRON's audit scope and findings ledger live in the kron repo) and
+its mainnet rollout is gated by KRON's registry pre-flight. `npm run verify:parity:v1` proves these builders
+byte-identical to KRON's reference over 17 production shapes.
+
 ### Covenant transactions are v1 (bindings + compute budgets) — REQUIRED
 
 A covenant spend only validates on-chain as a KIP-20 **version-1** transaction:

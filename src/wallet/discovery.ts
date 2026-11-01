@@ -56,6 +56,9 @@ export type KaspaProviderInfo = {
 /** One input a wallet is asked to sign, by position. `sighashType` 1 = SIGHASH_ALL; a wallet MUST
  *  refuse a type it does not implement rather than guess (KIP-12 covenant-signing rules). */
 export type KaspaSignInput = { index: number; sighashType: number };
+/** One entry of a KCC-12 §6.7 `kaspa_signInputs` request (0.20): `address` is the signing ACCOUNT — for a KCC-20
+ *  standard-family token input that is the holder's key address, never the covenant's P2SH. */
+export type KaspaSignInputV1 = { index: number; address: string; sighashType?: number };
 
 /**
  * The provider surface a wallet exposes (KIP-12). Only `requestAccounts` is REQUIRED; everything
@@ -81,6 +84,12 @@ export interface KaspaProvider {
   signMessage?(message: string): Promise<string>;
   /** Sign ONLY the listed inputs of a Kaspa Safe-JSON transaction; returns the signed Safe-JSON. */
   signPskt?(arg: { txJsonString: string; options: { signInputs: KaspaSignInput[] } }): Promise<string>;
+  /** KCC-12 §6.7 `kaspa_signInputs` (0.20, the KCC-20 standard family): sign ONLY the listed inputs with the account that
+   *  owns each entry's `address` and return RAW 64-byte Schnorr signatures — positional hex strings, or `{index, signature}`
+   *  records — WITHOUT composing any script (the dApp composes the covenant witness; `spendV1.applyWalletSignaturesV1`).
+   *  Refuse an `address` that is not an authorized account (code 4100) and a `sighashType` other than 0x01 (-32602).
+   *  Optional; a wallet without it is used through `signPskt` sign-and-extract, which a P2SH token input may not survive. */
+  signInputs?(arg: { txJsonString: string; signInputs: KaspaSignInputV1[] }): Promise<string[] | { index: number; signature: string }[]>;
   /** The `origin` parameter is a de-facto extension — KIP-12's disconnect takes no arguments. */
   disconnect?(origin?: string): Promise<void>;
   /** `chainChanged` is the KIP-12 network-change event (payload: canonical network id);
