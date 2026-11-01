@@ -38,14 +38,21 @@ export function feeForMass(billableMass: bigint, feeRate: number): bigint {
  * Estimate the L1 fee for a covenant trade from the size of the redeem it reveals — what the UI can know
  * before a transaction exists.
  *
- * Transient mass DOMINATES for these transactions (the comment in covenantTxV1 records a mainnet rejection
- * from sizing off compute alone), so estimating from serialized size is the right approximation. `overhead`
- * covers inputs, outputs and the funding signature beyond the revealed redeem.
+ * Transient mass DOMINATES for the audited family's 64–175 KB redeems (the comment in covenantTxV1 records a
+ * mainnet rejection from sizing off compute alone), so estimating from serialized size is the right approximation
+ * there. `overhead` covers inputs, outputs and the funding signature beyond the revealed redeem.
+ *
+ * `computeExtra` = the compute-mass terms beyond the size: output script bytes × 10 + input compute budgets × 100
+ * (covenantTxKcc20V1.massDimsV1). The billable mass is then max(size + computeExtra, transient), the builder's own
+ * rule. The standard family's ~20–30 KB shapes need it: their budgets outweigh their size (familySizesV1). Without
+ * it (0, the audited callers) the result is unchanged: the size alone never beats the transient mass.
  *
  * Returns sompi. Deliberately an OVER-estimate rather than under: showing a user less than they will be
  * debited is the failure being fixed, so erring low would reproduce it.
  */
-export function estimateCovenantL1Fee(redeemBytes: number, feeRate: number, overhead = 2_000): bigint {
+export function estimateCovenantL1Fee(redeemBytes: number, feeRate: number, overhead = 2_000, computeExtra = 0): bigint {
   const serialized = BigInt(Math.max(0, Math.floor(redeemBytes)) + Math.max(0, Math.floor(overhead)));
-  return feeForMass(normalizedTransientMass(serialized), feeRate);
+  const transient = normalizedTransientMass(serialized);
+  const compute = serialized + BigInt(Math.max(0, Math.floor(computeExtra)));
+  return feeForMass(compute > transient ? compute : transient, feeRate);
 }

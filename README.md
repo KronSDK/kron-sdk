@@ -278,7 +278,8 @@ kron-sdk
 ├─ ── KCC-20 STANDARD family (0.20, `cp.family === 'kcc20v1'`; see the next section) ──
 ├─ kcc20V1            the KCC-20 reference token program: state codec, owner witnesses, P2SH addresses, transfer scripts
 ├─ curveKcc20         curve_kcc20 builders: init / buy / sell / graduate / batchBuy
-├─ poolKcc20          pool_kcc20 builders: swapKasForToken / swapTokenForKas / addLiquidity / removeLiquidity / bindLp
+├─ poolKcc20          pool_kcc20 builders: swapKasForToken / swapTokenForKas / addLiquidity / removeLiquidity / bindLp;
+│                     an imported token's pool: genesis, and pool_open_kcc20 (nothing locked): bindLpOpen / exact deposits / closePool
 ├─ orderKcc20         order_kcc20 (refundable buy orders): escrow maths, refund
 ├─ transferKcc20      holder-to-holder transfers of standard tokens (1–2 pieces, change)
 ├─ covenantV1         v1 assembly for the family (bindings, compute budgets, mass, fees, the invocation check)
@@ -344,7 +345,7 @@ it. Such a token is a standard token any KCC-20 wallet or explorer can read; its
   not this package's — check the registry's pre-flight before building against mainnet.
 
 `verify:parity:v1` proves these builders byte-identical to KRON's reference builders over every production
-shape (17 shapes, 300+ checks), the same way `verify:parity` does for the KRON family. Full recipe:
+shape (26 shapes, 420+ checks), the same way `verify:parity` does for the KRON family. Full recipe:
 [docs/INTEGRATION.md § KCC-20 standard-family tokens](docs/INTEGRATION.md#kcc-20-standard-family-tokens-cpfamily--kcc20v1--020).
 
 ## Wallet developers: prove your signing path

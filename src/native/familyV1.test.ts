@@ -12,8 +12,10 @@ import { shapeFamilyTemplates, type FamilyTemplates } from '../client/templatesV
 import { hexOf, bytesOfHex } from './dispatchTag.js';
 import { p2pkOwnedV1, ZERO32, kcc20V1SpkForState, pushKcc20V1States, materializeKcc20V1Script, decodeKcc20V1State, type Kcc20V1State } from './kcc20V1Tx.js';
 import { SigScriptBuilder } from './sigscript.js';
-import { buildCurveV1Init, buildCurveV1Buy, buildCurveV1Sell, buildCurveV1Graduate, buildCurveV1BatchBuy, MAX_MERGE_PIECES, MAX_SELL_PIECES } from './curveKcc20Tx.js';
+import { buildCurveV1Genesis, buildCurveV1Init, buildCurveV1Buy, buildCurveV1Sell, buildCurveV1Graduate, buildCurveV1BatchBuy, MAX_MERGE_PIECES, MAX_SELL_PIECES } from './curveKcc20Tx.js';
 import { buildPoolV1SwapKasForToken, buildPoolV1SwapTokenForKas, buildPoolV1AddLiquidity, buildPoolV1RemoveLiquidity, buildPoolV1BindLp, MAX_SHARES, MAX_TRADER_PIECES } from './poolKcc20Tx.js';
+import { poolTemplateFromCompiledV1, buildPoolV1Genesis, buildPoolV1BindLpOpen, buildPoolV1ClosePool, poolV1GenesisState, quoteAddLiquidityExactV1, isOpenPoolV1, MAX_SEED_SHARES, type PoolV1Template } from './poolKcc20Tx.js';
+import { compiledFromServerV1 } from './templatesV1.js';
 import { buildOrderV1Refund, orderEscrowV1 } from './orderKcc20Tx.js';
 import { buildTokenTransferV1, MAX_TRANSFER_PIECES } from './transferKcc20Tx.js';
 import { assembleFamilyTx, signFamilyTxV1, devKeySignerV1, assertInvocationsV1, massDimsV1, withinCapsV1, parsePushesV1, pushMinimalV1, describeSpendV1, type CovenantSpendV1, type AssembledFamilyTx, type FundingEntryV1 } from './covenantTxKcc20V1.js';
@@ -27,10 +29,14 @@ const A = bytesOfHex('11'.repeat(32)), C = bytesOfHex('cc'.repeat(32)), P = byte
 const op = (i: number) => ({ transactionId: i.toString(16).padStart(2, '0').repeat(32), index: 0 });
 type Key = { pk: any; pub: Uint8Array; hex: string; address: string };
 let k: Kaspa, T: FamilyTemplates, KEYS: Record<string, Key>, keyByPub: Map<string, Key>;
+/** An imported token's pool: pool_open_kcc20.sil as the registry's pool-only compile answers it, at the 0 / 80 / 20 schedule. */
+let OPEN: PoolV1Template;
 
 beforeAll(async () => {
   k = await loadKaspa();
   T = shapeFamilyTemplates(FX, FX.params);
+  const s = FX.standalone.schedule;
+  OPEN = poolTemplateFromCompiledV1(compiledFromServerV1('poolOpen', FX.standalone.poolOpen), { ...T.pool.params, creatorFeeBps: BigInt(s.dexCreatorFeeBps), platformFeeBps: BigInt(s.dexPlatformFeeBps), lpFeeBps: BigInt(s.dexLpFeeBps), lockedShares: 0n }, T.token, 'poolOpen');
   KEYS = {};
   for (const [name, { seed, pubkey }] of Object.entries<any>(FX.keySeeds)) {
     const pk = new (k as any).PrivateKey(seed.repeat(32));
@@ -54,6 +60,31 @@ const devSign = (asm: AssembledFamilyTx, spend: CovenantSpendV1, f: (FundingEntr
 /** push lengths per input — the script SHAPE (what the three signing paths must agree on; signature bytes are random) */
 const scriptShape = (tx: any) => tx.inputs.map((inp: any) => parsePushesV1(bytesOfHex(String(inp.signatureScript))).map((p) => p.payload.length));
 
+/** An imported token's pool, step by step as kron's verify:kcc20v1-open-pool-flow runs it: a genesis that seeds the whole
+ *  deposit, a buy before the bind (no creator fee due, so the creator slot is the trader's own), bindLpOpen, a sell, an exact
+ *  deposit (audit KV1-02), its withdrawal, and closePool by the holder of every share. The seeder is the creatorFeeOwner. */
+type OpenChain = { gen: CovenantSpendV1 & { poolCovidHex: string }; buy: CovenantSpendV1; bind: CovenantSpendV1; sell: CovenantSpendV1; add: CovenantSpendV1; rm: CovenantSpendV1; close: CovenantSpendV1; seed: bigint };
+const openChain = (): OpenChain => {
+  const SEEDER = KEYS.creator, K0 = 2_500n, T0 = 100_000n;
+  const poolUtxo = (state: any) => ({ ...op(0), state, tokenUtxo: { ...op(1), value: DUST } });
+  const lpInv = (i: number, shares: bigint) => ({ ...op(i), value: DUST, amount: MAX_SHARES - shares });
+  const gen = buildPoolV1Genesis(k, OPEN, A, [piece(0, SEEDER, T0)], SEEDER.pub, K0, T0, { tokenDust: DUST, blake3 });
+  const P1 = bytesOfHex(gen.poolCovidHex), g = poolV1GenesisState(OPEN, A, K0, T0);
+  const buy = buildPoolV1SwapKasForToken(k, OPEN, poolUtxo(g), P1, KEYS.trader.pub, 10n * KAS, { tokenDust: DUST });
+  const afterBuy = { ...g, kasReserve: buy.quote.newKas, tokenReserve: buy.quote.newToken };
+  const bind = buildPoolV1BindLpOpen(k, OPEN, poolUtxo(afterBuy), P1, { lpDust: DUST });
+  const L = bytesOfHex((bind as any).covids.lpCovid), bound = { ...afterBuy, totalShares: afterBuy.kasReserve, lpCovid: L };
+  const sell = buildPoolV1SwapTokenForKas(k, OPEN, poolUtxo(bound), P1, KEYS.trader.pub, [piece(2, KEYS.trader, buy.quote.tokenOut)], buy.quote.tokenOut / 2n, { tokenDust: DUST, blake3 });
+  const afterSell = { ...bound, kasReserve: sell.quote.newKas, tokenReserve: sell.quote.newToken };
+  const qa = quoteAddLiquidityExactV1(afterSell, 300n)!;
+  const add = buildPoolV1AddLiquidity(k, OPEN, poolUtxo(afterSell), lpInv(3, afterSell.totalShares), P1, L, piece(2, KEYS.lp, qa.dToken), KEYS.lp.pub, 300n, { tokenDust: DUST, blake3 });
+  const grown = { ...afterSell, kasReserve: add.quote.newKas, tokenReserve: add.quote.newToken, totalShares: add.quote.newShares };
+  const rm = buildPoolV1RemoveLiquidity(k, OPEN, poolUtxo(grown), lpInv(2, grown.totalShares), P1, L, piece(3, KEYS.lp, add.quote.dShares), KEYS.lp.pub, { tokenDust: DUST, blake3 });
+  const shrunk = { ...grown, kasReserve: rm.quote.newKas, tokenReserve: rm.quote.newToken, totalShares: rm.quote.newShares };
+  const close = buildPoolV1ClosePool(k, OPEN, poolUtxo(shrunk), lpInv(2, shrunk.totalShares), P1, L, piece(3, SEEDER, shrunk.totalShares), SEEDER.pub, { tokenDust: DUST, blake3 });
+  return { gen, buy, bind, sell, add, rm, close, seed: afterBuy.kasReserve };
+};
+
 type Shape = { name: string; spend: () => CovenantSpendV1; funding: () => (FundingEntryV1 & { owner: Key })[] };
 const shapes = (): Shape[] => {
   const live = { graduated: false, tokenCovid: A, tokenReserve: 1_000_000n };
@@ -63,8 +94,12 @@ const shapes = (): Shape[] => {
   const poolUtxo = (state: any) => ({ ...op(0), state, tokenUtxo: { ...op(1), value: DUST } });
   const fee = { creatorFeeBps: 25n, platformFeeBps: 90n, devFundBps: 10n };
   const order = (i: number, covid: string, buyer: Key, kasIn: bigint) => ({ ...op(i), value: orderEscrowV1(kasIn, fee), covid, state: { curveCovid: C, buyerIdentifier: buyer.pub, tokenCovid: A, kasIn, minTokenOut: 1n } });
+  let openMemo: OpenChain | null = null; // built on first use: the shapes are listed before beforeAll loads the WASM
+  const open = (): OpenChain => (openMemo ??= openChain());
   return [
-    { name: 'init', spend: () => buildCurveV1Init(k, T.curve, curveUtxo(100n * KAS, { graduated: false, tokenCovid: ZERO32, tokenReserve: 0n }), C, 900_000_000n, 100_000_000n, { tokenDust: DUST }), funding: () => [funding(1, KEYS.creator)] },
+    // init proves the curve id is a singleton (audit KV1-01): it takes the outpoint that authorized the curve genesis, and
+    // the curve id is the real genesis id over it
+    { name: 'init', spend: () => { const G = { transactionId: 'f0'.repeat(32), index: 0 }; const Cg = bytesOfHex(buildCurveV1Genesis(k, T.curve, G, 100n * KAS, NET).curveCovid); return buildCurveV1Init(k, T.curve, curveUtxo(100n * KAS, { graduated: false, tokenCovid: ZERO32, tokenReserve: 0n }), Cg, 900_000_000n, 100_000_000n, G, { tokenDust: DUST }); }, funding: () => [funding(1, KEYS.creator)] },
     { name: 'buy (1 merge)', spend: () => buildCurveV1Buy(k, T.curve, curveUtxo(100n * KAS, live), inventory(1, 1_000_000n), C, KEYS.trader.pub, 10n * KAS, 9_009n, [piece(2, KEYS.trader, 500n)], { tokenDust: DUST, blake3 }), funding: () => [funding(3, KEYS.trader)] },
     { name: 'sell (2 pieces + change)', spend: () => buildCurveV1Sell(k, T.curve, curveUtxo(100n * KAS, live), [piece(2, KEYS.trader, 6_000n), piece(3, KEYS.trader, 4_400n)], inventory(1, 1_000_000n), C, KEYS.trader.pub, 10_000n, 1n * KAS, { tokenDust: DUST, blake3 }), funding: () => [funding(4, KEYS.trader)] },
     { name: 'graduate', spend: () => buildCurveV1Graduate(k, T.curve, curveUtxo(100n * KAS, live), inventory(1, 1_000_000n), C, T.pool, { tokenDust: DUST }), funding: () => [funding(2, KEYS.trader)] },
@@ -75,6 +110,13 @@ const shapes = (): Shape[] => {
     { name: 'pool addLiquidity', spend: () => buildPoolV1AddLiquidity(k, T.pool, poolUtxo(ps), { ...op(3), value: DUST, amount: MAX_SHARES - 1000n }, P, LP, piece(2, KEYS.lp, 100_000n), KEYS.lp.pub, 10_000n, { tokenDust: DUST, blake3 }), funding: () => [funding(4, KEYS.lp, 200n * KAS)] },
     { name: 'pool removeLiquidity', spend: () => buildPoolV1RemoveLiquidity(k, T.pool, poolUtxo({ ...ps, kasReserve: 110_000n, tokenReserve: 1_100_000n, totalShares: 1100n }), { ...op(2), value: DUST, amount: MAX_SHARES - 1100n }, P, LP, { ...op(3), value: DUST, state: p2pkOwnedV1(KEYS.lp.pub, 100n) }, KEYS.lp.pub, { tokenDust: DUST, blake3 }), funding: () => [funding(4, KEYS.lp)] },
     { name: 'pool bindLp', spend: () => buildPoolV1BindLp(k, T.pool, poolUtxo({ ...ps, lpCovid: ZERO32 }), P), funding: () => [funding(1, KEYS.trader)] },
+    { name: 'open pool genesis (the whole deposit)', spend: () => open().gen, funding: () => [funding(1, KEYS.creator, 40n * KAS)] },
+    { name: 'open swapKasForToken (pre-bind, trader slot)', spend: () => open().buy, funding: () => [funding(2, KEYS.trader)] },
+    { name: 'open bindLpOpen', spend: () => open().bind, funding: () => [funding(1, KEYS.creator)] },
+    { name: 'open swapTokenForKas (trader slot + change)', spend: () => open().sell, funding: () => [funding(3, KEYS.trader)] },
+    { name: 'open addLiquidity (exact)', spend: () => open().add, funding: () => [funding(4, KEYS.lp, 200n * KAS)] },
+    { name: 'open removeLiquidity', spend: () => open().rm, funding: () => [funding(4, KEYS.lp)] },
+    { name: 'open closePool (every share)', spend: () => open().close, funding: () => [funding(4, KEYS.creator)] },
     { name: 'transfer (1 piece)', spend: () => buildTokenTransferV1(k, T.token, A, [piece(0, KEYS.trader, 1_000n)], KEYS.trader.pub, KEYS.buyer2.pub, 400n), funding: () => [funding(1, KEYS.trader)] },
     { name: 'transfer (2 pieces)', spend: () => buildTokenTransferV1(k, T.token, A, [piece(0, KEYS.trader, 600n), piece(1, KEYS.trader, 400n)], KEYS.trader.pub, KEYS.buyer2.pub, 1_000n), funding: () => [funding(2, KEYS.trader)] },
   ];
@@ -110,7 +152,7 @@ describe('every production shape assembles into a well-formed, in-cap v1 transac
       expect(withinCapsV1(dims), `mass ${JSON.stringify(dims, (_, x) => (typeof x === 'bigint' ? String(x) : x))}`).toBe(true);
       const report = assertSighashAllV1(tx, asm);
       expect(report.length).toBe(asm.fundingInputIndexes.length + asm.tokenSignInputIndexes.length);
-      expect(report.filter((r) => r.kind === 'token').map((r) => r.witness)).toEqual(spend.inputs.flatMap((ci) => (ci.role === 'holderLeader' ? ['leader'] : ci.sign ? ['delegator'] : [])));
+      expect(report.filter((r) => r.kind === 'token').map((r) => r.witness)).toEqual(spend.inputs.flatMap((ci) => (ci.role === 'holderLeader' || ci.role === 'seederLeader' ? ['leader'] : ci.sign ? ['delegator'] : [])));
       expect(describeSpendV1(spend).inputs.length).toBe(spend.inputs.length);
     });
   }
@@ -127,6 +169,39 @@ describe('every production shape assembles into a well-formed, in-cap v1 transac
     const three = [piece(0, KEYS.trader, 1n), piece(1, KEYS.trader, 1n), piece(2, KEYS.trader, 1n)];
     expect(() => buildTokenTransferV1(k, T.token, A, three, KEYS.trader.pub, KEYS.buyer2.pub, 3n)).toThrow(/1\.\.2/);
     expect(() => buildTokenTransferV1(k, T.token, A, [piece(0, KEYS.buyer2, 5n)], KEYS.trader.pub, KEYS.buyer2.pub, 1n)).toThrow(/not owned by the connected wallet key/);
+  });
+});
+
+describe('an imported token\'s pool (pool_open_kcc20.sil, audit KV1-02..05)', () => {
+  it('the registry\'s pool-only compile shapes as the open program: nothing locked, its own entries', () => {
+    expect(isOpenPoolV1(OPEN)).toBe(true);
+    expect(OPEN.params.lockedShares).toBe(0n);
+    expect(Object.keys(OPEN.tags).sort()).toEqual(['addLiquidity', 'bindLpOpen', 'closePool', 'removeLiquidity', 'swapKasForToken', 'swapTokenForKas']);
+    expect(() => poolTemplateFromCompiledV1(compiledFromServerV1('poolOpen', FX.standalone.poolOpen), { ...OPEN.params, lockedShares: 1000n }, T.token, 'poolOpen')).toThrow(/no locked shares/);
+    expect(() => poolTemplateFromCompiledV1(compiledFromServerV1('pool', FX.standalone.pool), { ...OPEN.params, lockedShares: 0n }, T.token, 'pool')).toThrow(/lockedShares >= 1/);
+  });
+  it('genesis shares are min(k0, 5,000,000): a sole seeder never takes the whole share space (KV1-04)', () => {
+    expect(poolV1GenesisState(OPEN, A, 2_500n, 100_000n).totalShares).toBe(2_500n);
+    expect(poolV1GenesisState(OPEN, A, 9_000_000n, 100_000n).totalShares).toBe(MAX_SEED_SHARES);
+  });
+  it('a buy with no creator fee due pays the creator slot back to the trader (KV1-03); bindLpOpen seeds the reserve', () => {
+    const c = openChain();
+    const slot = c.buy.outputs[3];
+    expect(slot.role).toBe('traderSlot');
+    expect(String(slot.scriptPublicKey.script)).toBe(`20${KEYS.trader.hex}ac`);
+    expect(c.bind.kind).toBe('bindLpOpen');
+    expect(c.bind.economics.seedShares).toBe(c.seed);
+    expect(c.bind.economics.lpInventory).toBe(MAX_SHARES - c.seed);
+  });
+  it('a deposit pays exactly ceil(dShares·K/S) (KV1-02): 101 units at 2.5 units a share buy 40 shares for 100', () => {
+    const q = quoteAddLiquidityExactV1({ kasReserve: 5_000n, tokenReserve: 100_000n, totalShares: 2_000n }, 101n)!;
+    expect([q.dKas, q.dShares]).toEqual([100n, 40n]);
+  });
+  it('closePool pays the whole pool to the holder of every share, and refuses anyone holding less', () => {
+    const c = openChain();
+    expect(c.close.kind).toBe('closePool');
+    expect(c.close.outputs[0].role).toBe('lpKas');
+    expect(String(c.close.outputs[0].scriptPublicKey.script)).toBe(`20${KEYS.creator.hex}ac`);
   });
 });
 

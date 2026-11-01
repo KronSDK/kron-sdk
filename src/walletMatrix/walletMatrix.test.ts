@@ -67,12 +67,15 @@ const signInputsWallet = (who: Key, o: { sig?: (s65: string) => string } = {}) =
 const run = (w: WalletAdapter, extra: Partial<Parameters<typeof runWalletMatrix>[2]> = {}) => runWalletMatrix(k, w, { network: NET, build: 'FakeWallet 0.0.1 (test)', ...extra });
 const statuses = (r: WalletMatrixRecord) => r.results.map((x) => x.status);
 
-// The mass c/t/s KRON's page recorded for Kastle and KasWare on krontest.xyz (kron docs/kcc20-spike/WALLET-SIGNING.md).
+// The mass c/t/s of KRON's page shapes with the live programs (schema 6b7ec42cd29a), from KRON's own builders. KRON's page
+// recorded the same transfers for Kastle and KasWare on krontest.xyz on 2026-10-27 (kron docs/kcc20-spike/WALLET-SIGNING.md),
+// and 124046/40592/318977 (sell) and 103534/40248/310106 (buy) with that day's curve, 120 bytes shorter: the singleton
+// proof in init (audit KV1-01) adds 145 compute and 290 transient mass to each curve shape.
 const PAGE_MASS: Record<string, string> = {
   'transfer (1 piece)': '22600/1120/158562',
   'transfer (2 pieces)': '42283/1186/76203',
-  'sell (2 pieces + change)': '124046/40592/318977',
-  'buy (1 merge)': '103534/40248/310106',
+  'sell (2 pieces + change)': '124191/40882/318977',
+  'buy (1 merge)': '103679/40538/310106',
 };
 const PAGE_REQUESTED: Record<string, { token: number; funding: number }> = {
   'transfer (1 piece)': { token: 1, funding: 1 }, 'transfer (2 pieces)': { token: 2, funding: 1 },

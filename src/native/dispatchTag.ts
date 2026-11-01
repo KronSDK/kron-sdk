@@ -26,7 +26,7 @@ export const FAMILY_SIGNATURES = {
     transfer_delegator: 'transfer_delegator(byte[])',
   },
   curve: {
-    init: `init(int,${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},byte[],byte[])`,
+    init: `init(int,${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},byte[],byte[],byte[32],int)`, // + the genesis outpoint (KV1-01)
     buy: `buy(int,int,${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},int,byte[32])`,
     sell: `sell(int,int,${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},int,byte[32])`,
     graduate: `graduate(${POOL_STATE_TYPE},${TOKEN_STATE_ARG_TYPE},byte[],byte[])`,
@@ -38,6 +38,16 @@ export const FAMILY_SIGNATURES = {
     addLiquidity: `addLiquidity(int,int,int,${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},int,byte[32])`,
     removeLiquidity: `removeLiquidity(int,int,int,${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},int,byte[32])`,
     bindLp: `bindLp(${TOKEN_STATE_ARG_TYPE},byte[],byte[])`,
+  },
+  // pool_open_kcc20.sil (audit KV1-05): the pool that locks nothing, for imported tokens — the seeder's shares at the bind,
+  // and the exit of the holder of every outstanding share
+  poolOpen: {
+    swapKasForToken: `swapKasForToken(int,int,${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},int,byte[32])`,
+    swapTokenForKas: `swapTokenForKas(int,${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},int,byte[32])`,
+    addLiquidity: `addLiquidity(int,int,int,${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},int,byte[32])`,
+    removeLiquidity: `removeLiquidity(int,int,int,${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},int,byte[32])`,
+    bindLpOpen: `bindLpOpen(${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},byte[],byte[])`,
+    closePool: `closePool(${TOKEN_STATE_ARG_TYPE},${TOKEN_STATE_ARG_TYPE},int,byte[32])`,
   },
   order: {
     settle: `settle(${TOKEN_STATE_ARG_TYPE})`,

@@ -9,15 +9,38 @@ All notable changes to this package are documented here. This project follows
 
 KRON now launches a second kind of token beside the audited KRON token: a **KCC-20 standard token** — the KCC-20
 reference token program byte-for-byte (KCC-1 ABI) with KRON's `curve_kcc20` / `pool_kcc20` / `order_kcc20`
-companion programs. Everything is additive; the audited builders and their bytes are untouched.
+companion programs, and `pool_open_kcc20` for imported tokens' pools. Everything is additive; the audited builders and
+their bytes are untouched. The builders match KRON's live programs: covenant version (schema) `6b7ec42cd29a`, which KRON
+approved for mainnet launches on 2026-10-30.
 
 - **Namespaces:** `kcc20V1` (state codec, owner witnesses, P2SH addresses, transfer scripts,
   `decodeKcc20V1State`), `curveKcc20` (init / buy / sell / graduate / batchBuy), `poolKcc20` (swaps, add /
-  remove liquidity, bindLp, quotes), `orderKcc20` (refundable buy orders), `transferKcc20`, `covenantV1`
-  (`assembleFamilyTx`, fees, mass, `assertInvocationsV1`), `spendV1` (the wallet bridge), `templatesV1`
-  (`compiledFromServerV1` / `familyFromServerV1`, KCC-1 `templateHashV1`), `dispatchTag` (KCC-1 §3.5.1 tags,
-  the family's entry signatures), `l1Fee`, `transactionIntent`. Ported from KRON's production code;
-  `npm run verify:parity:v1` proves them byte-identical to the reference over 17 production shapes.
+  remove liquidity, bindLp, quotes, and imported tokens' pools below), `orderKcc20` (refundable buy orders),
+  `transferKcc20`, `covenantV1` (`assembleFamilyTx`, fees, mass, `assertInvocationsV1`), `spendV1` (the wallet
+  bridge), `templatesV1` (`compiledFromServerV1` / `familyFromServerV1`, KCC-1 `templateHashV1`), `dispatchTag`
+  (KCC-1 §3.5.1 tags, the family's entry signatures), `l1Fee`, `transactionIntent`. Ported from KRON's production
+  code; `npm run verify:parity:v1` proves them byte-identical to the reference over 26 production shapes.
+- **A curve's `init` proves its covenant id is a singleton:** `buildCurveV1Init(k, tpl, utxo, curveCovid,
+  inventoryAmount, devAmount, genesisOutpoint, opts)` takes the outpoint that authorized the curve's genesis (the
+  create transaction's funding input, the one `buildCurveV1Genesis` derives the curve id from).
+- **Imported tokens' pools.** KRON pools any KCC-20 token built with a known token program. Every new imported-token
+  pool runs `pool_open_kcc20` (template `program: 'poolOpen'`), which locks no shares: any liquidity provider can
+  withdraw at any time, and the holder of every share can close the pool.
+  - `poolKcc20.buildPoolV1Genesis` seeds a standalone pool from a holder's own pieces; `poolV1GenesisState`,
+    `openSeedSharesV1` (the opening shares, `min(k0, MAX_SEED_SHARES)`).
+  - `buildPoolV1BindLp` routes an open template to `buildPoolV1BindLpOpen`: the inventory to the pool, the seeder's
+    whole position to the `creatorFeeOwner`.
+  - Deposits into an open pool are exact (`quoteAddLiquidityExactV1`); `buildPoolV1RemoveLiquidity` refuses the last
+    share, and `buildPoolV1ClosePool` pays the whole pool to the holder of every share. `isOpenPoolV1` tells the
+    programs apart.
+  - A swap with no creator fee due pays the creator's output slot back to the trader.
+  - The template comes from the registry's pool-only compile, `POST /api/native/kcc20v1-template` with `build`: shape
+    it with `templatesV1.compiledFromServerV1(answer.program, answer.pool)` and `poolKcc20.poolTemplateFromCompiledV1(
+    compiled, params, tokenTemplate, answer.program)`. The token's own program is the indexer's
+    `GET /v1/kcc20/token/{tick}/program`. This release has no fetch helper for the two.
+- **`l1Fee.estimateCovenantL1Fee(redeemBytes, feeRate, overhead, computeExtra)`:** the fourth argument adds the compute
+  terms beyond the size (output script bytes × 10, input compute budgets × 100), which outweigh the size on the family's
+  shapes. Without it the estimate is unchanged.
 - **`client.fetchFamilyTemplates` / `shapeFamilyTemplates`** — `POST /api/native/kcc20v1-template`, every KCC-1
   template hash recomputed from the bytes and every compiled dispatch tag checked against the entry signature
   the builders encode for; `familyCurveParamsV1` / `familyPoolParamsV1` / `familyCompileBodyV1`.
@@ -40,16 +63,18 @@ companion programs. Everything is additive; the audited builders and their bytes
 - **Dependency:** `@noble/hashes` (BLAKE3 for KCC-1 dispatch tags and template hashes) — the package's first
   runtime dependency.
 - **Tests & fixtures:** the official KCC-1 / KCC-20 conformance vectors (`src/native/__fixtures__/kccs`) and the
-  four programs silverc v1.0.0 compiles for the test params (`kcc20v1-templates.json`, written by
-  `verify-parity-v1.mjs --write-fixture`); 40 new tests over the codec, the template adapter, every production
-  shape on the vendored WASM and both wallet paths with tampered answers.
+  programs silverc v1.0.0 compiles from KRON's live sources for the test params (`kcc20v1-templates.json`: the four
+  programs, plus an imported token's pool alone, LOCKED and open, at the 0 / 80 / 20 schedule; written by
+  `verify-parity-v1.mjs --write-fixture`). Tests over the codec, the template adapter, every production shape on the
+  vendored WASM (the imported-token pool's included), the open pool's rules and both wallet paths with tampered
+  answers: 168 tests in all.
 
 ### Unchanged
 
 No audited transaction bytes changed; `verify:parity` is byte-identical. `src/verify/tokenList.ts` is
 byte-identical (KRON pins it). Every 0.19.2 export is still present with the same signature; a 0.19.x consumer
-compiles and behaves unchanged. The standard family is **not audited** (pre-audit) and its mainnet rollout is
-gated by KRON's registry.
+compiles and behaves unchanged. The standard family is **not audited** (pre-audit; an external audit is pending)
+and KRON's registry decides which covenant versions it accepts on mainnet.
 
 ## 0.19.2
 

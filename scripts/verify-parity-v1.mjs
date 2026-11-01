@@ -85,25 +85,39 @@ const same = (a, b, m) => { const sa = safe(a), sb = safe(b); ok(sa === sb, m + 
 
 // --- templates: ONE compile (reference sources, silverc v1.0.0 WASM, the test params), shaped by BOTH sides -------------
 const B = S.compileBuild('reference');
+// An imported token's pool (S17): the schedule KRON's registry compiles it at (0 / 80 / 20 bps). `open` also compiles the
+// pool that locks nothing (pool_open_kcc20.sil, audit KV1-05), the program every new imported-token pool runs.
+const EXT = { dexCreatorFeeBps: 0, dexPlatformFeeBps: 80, dexLpFeeBps: 20, poolLockedShares: 1000 };
+const BX = S.compileBuild('reference', { params: EXT, open: true });
 const KEYS = S.KEYS, PARAMS = S.PARAMS;
 const curveParams = { creatorFeeOwner: KEYS.creator.pub, platformFeeOwner: KEYS.platform.pub, devFundOwner: KEYS.dev.pub, creatorIdentifier: KEYS.creator.pub, vKas: 1000n, graduationKas: 50_000_000n, creatorFeeBps: 25n, platformFeeBps: 90n, graduationFeeBps: 500n, devFundBps: 10n, poolLockedShares: 1000n };
 const poolParams = { creatorFeeOwner: KEYS.creator.pub, platformFeeOwner: KEYS.platform.pub, creatorFeeBps: 10n, platformFeeBps: 70n, lpFeeBps: 20n, lockedShares: 1000n };
 const T = {
-  ref: { token: B.token, curve: B.curve, pool: B.pool, order: B.order },
-  sdk: (() => { const token = D.kcc20V1.tokenTemplateFromCompiledV1(B.compiled.token); return { token, curve: D.curve.curveTemplateFromCompiledV1(B.compiled.curve, curveParams, token), pool: D.pool.poolTemplateFromCompiledV1(B.compiled.pool, poolParams, token), order: D.order.orderTemplateFromCompiledV1(B.compiled.order, token) }; })(),
+  ref: { token: B.token, curve: B.curve, pool: B.pool, order: B.order, poolExt: BX.pool, poolOpen: BX.poolOpen },
+  sdk: (() => {
+    const token = D.kcc20V1.tokenTemplateFromCompiledV1(B.compiled.token);
+    return {
+      token, curve: D.curve.curveTemplateFromCompiledV1(B.compiled.curve, curveParams, token), pool: D.pool.poolTemplateFromCompiledV1(B.compiled.pool, poolParams, token), order: D.order.orderTemplateFromCompiledV1(B.compiled.order, token),
+      poolExt: D.pool.poolTemplateFromCompiledV1(BX.compiled.pool, BX.pool.params, token), poolOpen: D.pool.poolTemplateFromCompiledV1(BX.compiled.poolOpen, BX.poolOpen.params, token, 'poolOpen'),
+    };
+  })(),
 };
 console.log('\n[1] templates shaped from the same compiled programs');
 for (const p of ['token', 'curve', 'pool', 'order']) same(T.ref[p], T.sdk[p], `${p} template (prefix, suffix, template hash, tags, params)`);
+same(T.ref.poolExt, T.sdk.poolExt, 'LOCKED pool template at the imported-token schedule (0 / 80 / 20)');
+same(T.ref.poolOpen, T.sdk.poolOpen, 'open pool template (pool_open_kcc20.sil: program poolOpen, nothing locked)');
 { // the server-answer adapter: the compile output re-read through compiledFromServerV1 equals the compiled program
   const asServer = (c) => ({ name: c.name, bytecodeHex: c.bytecodeHex, stateSpan: c.stateSpan, prefixLen: c.prefix.length, suffixLen: c.suffix.length, templateHash: c.templateHash, dispatchTags: c.dispatchTags });
   const re = D.compile.familyFromServerV1({ token: asServer(B.compiled.token), curve: asServer(B.compiled.curve), pool: asServer(B.compiled.pool), order: asServer(B.compiled.order) });
   ok(['token', 'curve', 'pool', 'order'].every((p) => hex(re[p].prefix) === hex(B.compiled[p].prefix) && hex(re[p].suffix) === hex(B.compiled[p].suffix) && re[p].templateHash === B.compiled[p].templateHash), 'templatesV1.familyFromServerV1 re-derives prefix / suffix / template hash from the server shape');
   same(hex(R.compile.templateHashV1(B.compiled.curve.prefix, B.compiled.curve.suffix)), hex(D.compile.templateHashV1(B.compiled.curve.prefix, B.compiled.curve.suffix)), 'templateHashV1 (KCC-1 §3.7.3) agrees on the compiled curve');
   ok(hex(D.compile.templateHashV1(B.compiled.curve.prefix, B.compiled.curve.suffix)) === B.compiled.curve.templateHash, 'templateHashV1 equals the compiler-reported template hash');
+  const ro = D.compile.compiledFromServerV1('poolOpen', asServer(BX.compiled.poolOpen));
+  ok(hex(ro.prefix) === hex(BX.compiled.poolOpen.prefix) && hex(ro.suffix) === hex(BX.compiled.poolOpen.suffix) && ro.templateHash === BX.compiled.poolOpen.templateHash, 'templatesV1.compiledFromServerV1 re-reads the open pool (the registry\'s pool-only compile) to the same program');
 }
 
 console.log('\n[2] pure surface');
-for (const p of ['token', 'curve', 'pool', 'order']) same(R.dispatchTag.familyTagsV1(p), D.dispatchTag.familyTagsV1(p), `dispatch tags: ${p}`);
+for (const p of ['token', 'curve', 'pool', 'poolOpen', 'order']) same(R.dispatchTag.familyTagsV1(p), D.dispatchTag.familyTagsV1(p), `dispatch tags: ${p}`);
 same(R.dispatchTag.TOKEN_DISPATCH_TAGS, D.dispatchTag.TOKEN_DISPATCH_TAGS, 'TOKEN_DISPATCH_TAGS');
 same(R.dispatchTag.FAMILY_SIGNATURES, D.dispatchTag.FAMILY_SIGNATURES, 'FAMILY_SIGNATURES');
 for (const [pre, suf] of [['', ''], ['61', '6263'], ['6162', '63'], ['00ff', '100080']]) same(hex(R.compile.templateHashV1(fromHex(pre), fromHex(suf))), hex(D.compile.templateHashV1(fromHex(pre), fromHex(suf))), `templateHashV1(${pre || '∅'}, ${suf || '∅'})`);
@@ -130,11 +144,17 @@ for (const [kas, tok, x] of [[100_000n, 1_000_000n, 10n * 10n ** 8n], [5_000_000
   same(R.pool.quoteAddLiquidityV1(st, 10_000n), D.pool.quoteAddLiquidityV1(st, 10_000n), `quoteAddLiquidityV1(${kas},${tok})`);
   const st2 = { ...st, totalShares: 1100n };
   same(R.pool.quoteRemoveLiquidityV1(st2, poolParams, 100n), D.pool.quoteRemoveLiquidityV1(st2, poolParams, 100n), `quoteRemoveLiquidityV1(${kas},${tok})`);
+  same(R.pool.quoteAddLiquidityExactV1(st, 300n), D.pool.quoteAddLiquidityExactV1(st, 300n), `quoteAddLiquidityExactV1(${kas},${tok})`);
 }
+// the open pool's own arithmetic (audit KV1-02, KV1-04): exact deposits, the seed-share cap, the genesis state
+same(R.pool.quoteAddLiquidityExactV1({ kasReserve: 5000n, tokenReserve: 100_000n, totalShares: 2000n }, 101n), D.pool.quoteAddLiquidityExactV1({ kasReserve: 5000n, tokenReserve: 100_000n, totalShares: 2000n }, 101n), 'quoteAddLiquidityExactV1 at 2.5 units a share (101-unit budget)');
+for (const k0 of [1n, 2_500n, 4_999_999n, 5_000_000n, 9_000_000n]) same(R.pool.openSeedSharesV1(k0), D.pool.openSeedSharesV1(k0), `openSeedSharesV1(${k0})`);
+for (const [p, k0, t0] of [['poolOpen', 2_500n, 100_000n], ['poolOpen', 9_000_000n, 100_000n], ['poolExt', 2_500n, 100_000n]]) same(R.pool.poolV1GenesisState(T.ref[p], A, k0, t0), D.pool.poolV1GenesisState(T.sdk[p], A, k0, t0), `poolV1GenesisState(${p}, ${k0}, ${t0})`);
+same([R.pool.isOpenPoolV1(T.ref.poolOpen), R.pool.isOpenPoolV1(T.ref.pool)], [D.pool.isOpenPoolV1(T.sdk.poolOpen), D.pool.isOpenPoolV1(T.sdk.pool)], 'isOpenPoolV1 (open, LOCKED)');
 for (const [mass, rate] of [[1n, 100], [10_000n, 100], [123_456n, 250], [500_000n, 1]]) same(R.l1Fee.feeForMass(mass, rate), D.l1Fee.feeForMass(mass, rate), `feeForMass(${mass}, ${rate})`);
 for (const b of [0n, 100n, 4_000n, 65_535n]) same(R.l1Fee.normalizedTransientMass(b), D.l1Fee.normalizedTransientMass(b), `normalizedTransientMass(${b})`);
 for (const [b, r] of [[647, 100], [4031, 100], [14651, 250]]) same(R.l1Fee.estimateCovenantL1Fee(b, r), D.l1Fee.estimateCovenantL1Fee(b, r), `estimateCovenantL1Fee(${b}, ${r})`);
-const consts = { curve: ['MAX_TOKEN', 'MAX_MERGE_PIECES', 'MAX_SELL_PIECES', 'MAX_BATCH', 'CURVE_V1_STATE_LEN', 'SCALE'], pool: ['POOL_V1_STATE_LEN', 'MAX_TRADER_PIECES', 'MAX_SHARES'], order: ['ORDER_V1_STATE_LEN', 'MIN_ORDER_KAS', 'ORDER_TOKEN_DUST', 'ORDER_TX_FEE'], transfer: ['COVENANT_DUST_V1', 'MAX_TRANSFER_PIECES'], kcc20V1: ['KCC20V1_STATE_LEN', 'KCC20V1_STATE_OFFSET', 'OWNER_SCHEME', 'BORROW_SCHEME', 'SIG65_LEN', 'KCC20V1_FRAMING'], covenant: ['TX_VERSION', 'SUBNET_ZERO', 'MASS_CAP', 'FUNDING_COMPUTE_V1', 'CURVE_V1_COMPUTE', 'POOL_V1_COMPUTE', 'ORDER_V1_COMPUTE', 'TOKEN_V1_COMPUTE'], l1Fee: ['TRANSIENT_BYTE_TO_MASS_FACTOR', 'COMPUTE_MASS_LIMIT', 'TRANSIENT_MASS_LIMIT', 'FEE_BUFFER_NUM', 'FEE_BUFFER_DEN', 'MIN_FEE_SOMPI', 'MIN_FEE_RATE'] };
+const consts = { curve: ['MAX_TOKEN', 'MAX_MERGE_PIECES', 'MAX_SELL_PIECES', 'MAX_BATCH', 'CURVE_V1_STATE_LEN', 'SCALE'], pool: ['POOL_V1_STATE_LEN', 'MAX_TRADER_PIECES', 'MAX_SHARES', 'MAX_SEED_SHARES', 'OPEN_POOL_MIN_KAS_SOMPI'], order: ['ORDER_V1_STATE_LEN', 'MIN_ORDER_KAS', 'ORDER_TOKEN_DUST', 'ORDER_TX_FEE'], transfer: ['COVENANT_DUST_V1', 'MAX_TRANSFER_PIECES'], kcc20V1: ['KCC20V1_STATE_LEN', 'KCC20V1_STATE_OFFSET', 'OWNER_SCHEME', 'BORROW_SCHEME', 'SIG65_LEN', 'KCC20V1_FRAMING'], covenant: ['TX_VERSION', 'SUBNET_ZERO', 'MASS_CAP', 'FUNDING_COMPUTE_V1', 'CURVE_V1_COMPUTE', 'POOL_V1_COMPUTE', 'ORDER_V1_COMPUTE', 'TOKEN_V1_COMPUTE'], l1Fee: ['TRANSIENT_BYTE_TO_MASS_FACTOR', 'COMPUTE_MASS_LIMIT', 'TRANSIENT_MASS_LIMIT', 'FEE_BUFFER_NUM', 'FEE_BUFFER_DEN', 'MIN_FEE_SOMPI', 'MIN_FEE_RATE'] };
 for (const [ns, names] of Object.entries(consts)) for (const n of names) same(R[ns][n], D[ns][n], `${ns}.${n}`);
 
 // --- the shapes: both sides build, assemble and sign the same list from the same inputs ----------------------------------
@@ -143,7 +163,7 @@ const DUST = 50_000_000n, KAS = 100_000_000n;
 const keyByPub = new Map(Object.values(KEYS).map((x) => [x.hex, x]));
 const p2pkAddress = (who) => k.addressFromScriptPublicKey(new k.ScriptPublicKey(0, `20${who.hex}ac`), NET).toString();
 function shapesWith(M, tpl) {
-  const { token, curve, pool, order } = tpl;
+  const { token, curve, pool, order, poolExt, poolOpen } = tpl;
   const cs = (graduated, tokenCovid, tokenReserve) => ({ graduated, tokenCovid, tokenReserve });
   const curveUtxo = (realKas, state) => ({ ...op(0), realKas, state });
   const inventory = (i, amount) => ({ ...op(i), value: DUST, amount });
@@ -155,8 +175,29 @@ function shapesWith(M, tpl) {
   const live = cs(false, A, 1_000_000n), ps = poolState(100_000n, 1_000_000n, 1000n, LP), ps2 = poolState(110_000n, 1_100_000n, 1100n, LP), ps0 = poolState(100_000n, 1_000_000n, 1000n, M.kcc20V1.ZERO32);
   const f = (i, who, amount) => S.fundingEntry(i, who, amount);
   const o1 = orderUtxo(2, '51'.repeat(32), KEYS.trader, 50n * KAS, 1n), o2 = orderUtxo(3, '52'.repeat(32), KEYS.buyer2, 50n * KAS, 1n);
+  // init proves the curve's covenant id is a singleton (audit KV1-01), so it takes the outpoint that authorized the curve's
+  // genesis, and the curve id is the real genesis id over that outpoint (kron's _shapes.mjs builds it the same way)
+  const G = { transactionId: 'f0'.repeat(32), index: 0 };
+  const Cg = fromHex(M.curve.buildCurveV1Genesis(k, curve, G, 100n * KAS, NET).curveCovid);
+  // an imported token's pool (S17, audit KV1-02..05), the sequence of kron's verify:kcc20v1-open-pool-flow: a genesis that
+  // seeds the whole deposit, a buy before the bind (no creator fee due: the creator slot is the trader's), bindLpOpen, a sell,
+  // an exact deposit and its withdrawal, then closePool by the holder of every share. The seeder is the creatorFeeOwner.
+  const SEEDER = KEYS.creator, K0 = 2_500n, T0 = 100_000n;
+  const gen = M.pool.buildPoolV1Genesis(k, poolOpen, A, [piece(0, SEEDER, T0)], SEEDER.pub, K0, T0, { tokenDust: DUST, blake3 });
+  const P1 = fromHex(gen.poolCovidHex), genState = M.pool.poolV1GenesisState(poolOpen, A, K0, T0);
+  const obuy = M.pool.buildPoolV1SwapKasForToken(k, poolOpen, poolUtxo(genState), P1, KEYS.trader.pub, 10n * KAS, { tokenDust: DUST });
+  const afterBuy = { ...genState, kasReserve: obuy.quote.newKas, tokenReserve: obuy.quote.newToken };
+  const obind = M.pool.buildPoolV1BindLp(k, poolOpen, poolUtxo(afterBuy), P1, { lpDust: DUST });
+  const LP1 = fromHex(obind.covids.lpCovid), bound = { ...afterBuy, totalShares: afterBuy.kasReserve, lpCovid: LP1 };
+  const osell = M.pool.buildPoolV1SwapTokenForKas(k, poolOpen, poolUtxo(bound), P1, KEYS.trader.pub, [piece(2, KEYS.trader, obuy.quote.tokenOut)], obuy.quote.tokenOut / 2n, { tokenDust: DUST, blake3 });
+  const afterSell = { ...bound, kasReserve: osell.quote.newKas, tokenReserve: osell.quote.newToken };
+  const qa = M.pool.quoteAddLiquidityExactV1(afterSell, 300n);
+  const oadd = M.pool.buildPoolV1AddLiquidity(k, poolOpen, poolUtxo(afterSell), lpInv(3, afterSell.totalShares), P1, LP1, piece(2, KEYS.lp, qa.dToken), KEYS.lp.pub, 300n, { tokenDust: DUST, blake3 });
+  const grown = { ...afterSell, kasReserve: oadd.quote.newKas, tokenReserve: oadd.quote.newToken, totalShares: oadd.quote.newShares };
+  const orm = M.pool.buildPoolV1RemoveLiquidity(k, poolOpen, poolUtxo(grown), lpInv(2, grown.totalShares), P1, LP1, piece(3, KEYS.lp, oadd.quote.dShares), KEYS.lp.pub, { tokenDust: DUST, blake3 });
+  const shrunk = { ...grown, kasReserve: orm.quote.newKas, tokenReserve: orm.quote.newToken, totalShares: orm.quote.newShares };
   return [
-    ['init', () => M.curve.buildCurveV1Init(k, curve, curveUtxo(100n * KAS, cs(false, M.kcc20V1.ZERO32, 0n)), C, 900_000_000n, 100_000_000n, { tokenDust: DUST }), [f(1, KEYS.creator)]],
+    ['init', () => M.curve.buildCurveV1Init(k, curve, curveUtxo(100n * KAS, cs(false, M.kcc20V1.ZERO32, 0n)), Cg, 900_000_000n, 100_000_000n, G, { tokenDust: DUST }), [f(1, KEYS.creator)]],
     ['buy (plain)', () => M.curve.buildCurveV1Buy(k, curve, curveUtxo(100n * KAS, live), inventory(1, 1_000_000n), C, KEYS.trader.pub, 10n * KAS, 9_009n, [], { tokenDust: DUST, blake3 }), [f(2, KEYS.trader)]],
     ['buy (1 merge)', () => M.curve.buildCurveV1Buy(k, curve, curveUtxo(100n * KAS, live), inventory(1, 1_000_000n), C, KEYS.trader.pub, 10n * KAS, 9_009n, [piece(2, KEYS.trader, 500n)], { tokenDust: DUST, blake3 }), [f(3, KEYS.trader)]],
     ['buy (2 merges)', () => M.curve.buildCurveV1Buy(k, curve, curveUtxo(100n * KAS, live), inventory(1, 1_000_000n), C, KEYS.trader.pub, 10n * KAS, 9_009n, [piece(2, KEYS.trader, 500n), piece(3, KEYS.trader, 300n)], { tokenDust: DUST, blake3 }), [f(4, KEYS.trader)]],
@@ -171,6 +212,15 @@ function shapesWith(M, tpl) {
     ['pool addLiquidity', () => M.pool.buildPoolV1AddLiquidity(k, pool, poolUtxo(ps), lpInv(3, 1000n), P, LP, piece(2, KEYS.lp, 100_000n), KEYS.lp.pub, 10_000n, { tokenDust: DUST, blake3 }), [f(4, KEYS.lp, 200n * KAS)]],
     ['pool removeLiquidity', () => M.pool.buildPoolV1RemoveLiquidity(k, pool, poolUtxo(ps2), lpInv(2, 1100n), P, LP, { ...op(3), value: DUST, state: M.kcc20V1.p2pkOwnedV1(KEYS.lp.pub, 100n) }, KEYS.lp.pub, { tokenDust: DUST, blake3 }), [f(4, KEYS.lp)]],
     ['pool bindLp', () => M.pool.buildPoolV1BindLp(k, pool, poolUtxo(ps0), P), [f(1, KEYS.trader)]],
+    ['standalone pool genesis (LOCKED)', () => M.pool.buildPoolV1Genesis(k, poolExt, A, [piece(0, SEEDER, T0)], SEEDER.pub, K0, T0, { tokenDust: DUST, blake3 }), [f(1, SEEDER, 40n * KAS)]],
+    ['open pool genesis (the whole deposit)', () => gen, [f(1, SEEDER, 40n * KAS)]],
+    ['open swapKasForToken (pre-bind, trader slot)', () => obuy, [f(2, KEYS.trader)]],
+    ['open bindLpOpen (via buildPoolV1BindLp)', () => obind, [f(1, SEEDER)]],
+    ['open bindLpOpen (direct)', () => M.pool.buildPoolV1BindLpOpen(k, poolOpen, poolUtxo(afterBuy), P1, { lpDust: DUST }), [f(1, SEEDER)]],
+    ['open swapTokenForKas (trader slot + change)', () => osell, [f(3, KEYS.trader)]],
+    ['open addLiquidity (exact)', () => oadd, [f(4, KEYS.lp, 200n * KAS)]],
+    ['open removeLiquidity (the deposit)', () => orm, [f(4, KEYS.lp)]],
+    ['open closePool (every share)', () => M.pool.buildPoolV1ClosePool(k, poolOpen, poolUtxo(shrunk), lpInv(2, shrunk.totalShares), P1, LP1, piece(3, SEEDER, shrunk.totalShares), SEEDER.pub, { tokenDust: DUST, blake3 }), [f(4, SEEDER)]],
     ['transfer (1 piece)', () => M.transfer.buildTokenTransferV1(k, token, A, [piece(0, KEYS.trader, 1_000n)], KEYS.trader.pub, KEYS.buyer2.pub, 400n), [f(1, KEYS.trader)]],
     ['transfer (2 pieces)', () => M.transfer.buildTokenTransferV1(k, token, A, [piece(0, KEYS.trader, 600n), piece(1, KEYS.trader, 400n)], KEYS.trader.pub, KEYS.buyer2.pub, 1_000n), [f(2, KEYS.trader)]],
   ];
@@ -215,7 +265,7 @@ async function runSide(M, tpl) {
 }
 console.log('\n[3] production shapes: reference builders vs this SDK, same compiled programs, same inputs');
 const ref = await runSide(R, T.ref), sdk = await runSide(D, T.sdk);
-ok(ref.length === sdk.length && ref.length === 17, `${sdk.length} shapes built on both sides`);
+ok(ref.length === sdk.length && ref.length === 26, `${sdk.length} shapes built on both sides`);
 for (let i = 0; i < Math.min(ref.length, sdk.length); i++) {
   const a = ref[i], b = sdk[i];
   ok(spendJson(a.spend) === spendJson(b.spend), `${a.name}: CovenantSpendV1 byte-identical (inputs, pre-scripted invocations, redeems, outputs, bindings, economics)`);
@@ -233,13 +283,18 @@ if (WRITE_FIXTURE) {
   const asServer = (c) => ({ name: c.name, bytecodeHex: c.bytecodeHex, stateSpan: c.stateSpan, prefixLen: c.prefix.length, suffixLen: c.suffix.length, templateHash: c.templateHash, dispatchTags: c.dispatchTags });
   let schema = null;
   const vdir = `${KRON}/covenants/kcc20v1/versions`;
-  if (existsSync(vdir)) for (const d of readdirSync(vdir)) { try { const m = JSON.parse(readFileSync(join(vdir, d, 'manifest.json'), 'utf8')); if (m.templateHashes?.token === B.compiled.token.templateHash && m.templateHashes?.order === B.compiled.order.templateHash) schema = m.schema; } catch {} }
+  // the schema is the hash over the reference SOURCE TEXTS (kron templateVersionsV1); the token and order programs alone cannot
+  // tell it, since KCC20.sil and order_kcc20.sil are byte-identical across every archived version. Kept only if archived.
+  const sourcesSchema = (await imp(`${N}/templateVersionsV1.ts`)).schemaHashOfSourcesV1(S.REFERENCE_SOURCES);
+  if (existsSync(vdir)) for (const d of readdirSync(vdir)) { try { const m = JSON.parse(readFileSync(join(vdir, d, 'manifest.json'), 'utf8')); if (m.schema === sourcesSchema) schema = m.schema; } catch {} }
   const fx = {
     _comment: 'kcc20v1 family templates compiled by silverc v1.0.0 (WASM) from the archived reference sources for the test params below — what POST /api/native/kcc20v1-template answers for such a token. Regenerate: npm run build && node scripts/verify-parity-v1.mjs --write-fixture',
     family: 'kcc20v1', templateVersion: { family: 'kcc20v1', schema, silverc: null },
     keySeeds: Object.fromEntries(Object.entries(KEYS).map(([n, x]) => [n, { seed: Object.entries({ creator: 'c1', platform: 'c2', dev: 'c3', trader: 'b5', buyer2: 'b2', lp: 'b4' }).find(([kk]) => kk === n)[1], pubkey: x.hex }])),
     params: PARAMS,
     token: asServer(B.compiled.token), order: asServer(B.compiled.order), pool: asServer(B.compiled.pool), curve: asServer(B.compiled.curve),
+    // an imported token's pool: what the same route answers with `build` (the pool alone) at the 0 / 80 / 20 schedule
+    standalone: { schedule: { dexCreatorFeeBps: EXT.dexCreatorFeeBps, dexPlatformFeeBps: EXT.dexPlatformFeeBps, dexLpFeeBps: EXT.dexLpFeeBps }, pool: asServer(BX.compiled.pool), poolOpen: asServer(BX.compiled.poolOpen) },
   };
   writeFileSync(FIXTURE, JSON.stringify(fx, null, 1) + '\n');
   console.log(`\n  wrote ${FIXTURE.replace(SDK, '.')} (schema ${schema ? schema.slice(0, 12) + '…' : 'unknown'}, ${(Buffer.byteLength(JSON.stringify(fx)) / 1024).toFixed(0)} KB)`);

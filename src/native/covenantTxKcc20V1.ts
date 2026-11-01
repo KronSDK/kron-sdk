@@ -39,14 +39,14 @@ export type CovInputV1 = {
   /** the signature script (hex). When `sign` is set it carries a SIG65_PLACEHOLDER inside the witness. */
   signatureScript: string;
   /** the logical invocation, for the confirm step and the gates: program, entry, and the decoded arguments */
-  invocation: { program: 'curve' | 'pool' | 'order' | 'token'; entry: string; args: unknown[] };
+  invocation: { program: 'curve' | 'pool' | 'poolOpen' | 'order' | 'token'; entry: string; args: unknown[] };
   /** present on a holder's token input: who must sign and how the final script is rebuilt from the signature */
   sign?: { holderPubkey: Uint8Array; ownerScheme: number; withSignature: (sig65: Uint8Array) => string };
 };
 export type CovOutputV1 = { value: bigint; scriptPublicKey: Spk; role: string; covenant?: { covid: string; authorizingInput: number } };
 export type CovenantSpendV1 = {
   family: 'kcc20v1';
-  kind: 'init' | 'buy' | 'sell' | 'graduate' | 'batchBuy' | 'swapKasForToken' | 'swapTokenForKas' | 'addLiquidity' | 'removeLiquidity' | 'bindLp' | 'refundOrder' | 'transfer' | 'genesis';
+  kind: 'init' | 'buy' | 'sell' | 'graduate' | 'batchBuy' | 'swapKasForToken' | 'swapTokenForKas' | 'addLiquidity' | 'removeLiquidity' | 'bindLp' | 'bindLpOpen' | 'closePool' | 'refundOrder' | 'transfer' | 'genesis' | 'poolGenesis';
   inputs: CovInputV1[];
   outputs: CovOutputV1[];
   economics: Record<string, bigint>;
@@ -115,8 +115,10 @@ export function serializedSizeV1(tx: any): bigint {
   for (const out of tx.outputs ?? []) { size += 8n + 2n + 8n + hexBytes(out.scriptPublicKey?.script ?? out.scriptPublicKey); if (out.covenant) size += 2n + 32n; }
   return size;
 }
-/** The three mass dimensions with placeholder 66-byte signatures on the listed inputs. storage = the SDK figure
- *  (0 when the SDK cannot compute it), compute = bytes + spk bytes×10 + budgets×100, transient = normalized size. */
+/** The three mass dimensions with placeholder 66-byte signatures on the listed inputs — the FUNDING inputs only: a holder
+ *  token input's signature script is already its final size before signing (the witness is spliced into a same-length slot),
+ *  so listing it here under-measures by the whole redeem. storage = the SDK figure (0 when the SDK cannot compute it),
+ *  compute = bytes + spk bytes×10 + budgets×100, transient = normalized size. */
 export function massDimsV1(k: K, tx: any, networkId: string, placeholderIdxs: number[]): { compute: bigint; transient: bigint; storage: bigint; bytes: bigint } {
   const kk = k as any;
   const ins = tx.inputs; const saved = placeholderIdxs.map((i) => ins[i].signatureScript);

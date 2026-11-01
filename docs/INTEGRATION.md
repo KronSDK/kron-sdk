@@ -514,7 +514,18 @@ family builders refuse a template whose compiled dispatch tags disagree with the
 
 This family is **not audited** (pre-audit; KRON's audit scope and findings ledger live in the kron repo) and
 its mainnet rollout is gated by KRON's registry pre-flight. `npm run verify:parity:v1` proves these builders
-byte-identical to KRON's reference over 17 production shapes.
+byte-identical to KRON's reference over 26 production shapes, at KRON's live covenant version (schema `6b7ec42cd29a`).
+
+**Imported tokens' pools.** KRON also pools KCC-20 tokens launched elsewhere, when their token program is a build
+KRON knows. Such a pool has no curve and no order covenant. Every new one runs `pool_open_kcc20` (template
+`program: 'poolOpen'`), which locks no shares: any liquidity provider can withdraw at any time, and the holder of
+every share can close the pool (`poolKcc20.buildPoolV1ClosePool`). Its template is the registry's pool-only compile,
+`POST /api/native/kcc20v1-template` with `build` (the known build's id), whose answer carries `program`, `pool` and `build`:
+shape it with `templatesV1.compiledFromServerV1(program, pool)` and
+`poolKcc20.poolTemplateFromCompiledV1(compiled, params, tokenTemplate, program)`, where the token template is the
+token's own program, served by the indexer at `GET /v1/kcc20/token/{tick}/program`. The swaps, deposits and
+withdrawals are the pool builders above. Deposits into an open pool are exact (`quoteAddLiquidityExactV1`), and a
+swap with no creator fee due pays the creator's output slot back to the trader.
 
 ### Covenant transactions are v1 (bindings + compute budgets) — REQUIRED
 

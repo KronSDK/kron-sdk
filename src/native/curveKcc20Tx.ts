@@ -108,7 +108,7 @@ export function buildCurveV1Genesis(k: K, tpl: CurveV1Template, fundingOutpoint:
 }
 
 // --- init: bind the token (genesis over outputs 1 and 2) and pre-mint inventory + dev allocation -------------------
-export function buildCurveV1Init(k: K, tpl: CurveV1Template, utxo: CurveV1Utxo, curveCovid: Uint8Array, inventoryAmount: bigint, devAmount: bigint, opts: { tokenDust?: bigint } = {}): CovenantSpendV1 {
+export function buildCurveV1Init(k: K, tpl: CurveV1Template, utxo: CurveV1Utxo, curveCovid: Uint8Array, inventoryAmount: bigint, devAmount: bigint, genesisOutpoint: { transactionId: string; index: number }, opts: { tokenDust?: bigint } = {}): CovenantSpendV1 {
   if (hexOf(tpl.params.creatorIdentifier) !== hexOf(tpl.params.creatorFeeOwner)) throw new Error('init is unsatisfiable unless creatorIdentifier == creatorFeeOwner (the covenant requires the witness input to be both)');
   if (inventoryAmount < 1n) throw new Error('inventory must be >= 1');
   if (devAmount < 1n) throw new Error('dev allocation must be >= 1 (use 1 for "no dev")');
@@ -121,8 +121,13 @@ export function buildCurveV1Init(k: K, tpl: CurveV1Template, utxo: CurveV1Utxo, 
   const tokenCovidHex = genesisCovenantId(k, outpoint(utxo), [{ index: 1, value: dust, scriptPublicKey: invSpk }, { index: 2, value: dust, scriptPublicKey: devSpk }]);
   const tokenCovid = covidToBytes(tokenCovidHex);
   const newRedeem = materializeCurveV1Script(tpl, { graduated: false, tokenCovid, tokenReserve: inventoryAmount });
-  const args = [1n, inventory, devAlloc, tpl.token.prefix, tpl.token.suffix];
-  const inputs: CovInputV1[] = [curveInput(k, tpl, utxo, curveCovid, 'init', args, (b) => { b.int(1n); pushTokenStateV1(b, tpl.token.templateHash, inventory); pushTokenStateV1(b, tpl.token.templateHash, devAlloc); b.data(tpl.token.prefix).data(tpl.token.suffix); })];
+  // KV1-01: init proves the curve's covenant id is a singleton, from the outpoint that authorized its genesis (the create
+  // tx's funding input: the same outpoint buildCurveV1Genesis derived the id from)
+  const genTxid = /^[0-9a-f]{64}$/i.test(String(genesisOutpoint?.transactionId ?? '')) ? covidToBytes(genesisOutpoint.transactionId) : null;
+  const genIndex = Number(genesisOutpoint?.index);
+  if (!genTxid || !Number.isInteger(genIndex) || genIndex < 0 || genIndex > 65535) throw new Error('init needs the outpoint that authorized the curve genesis (a 32-byte txid and an index in [0, 65535]) for its singleton proof');
+  const args = [1n, inventory, devAlloc, tpl.token.prefix, tpl.token.suffix, genTxid, BigInt(genIndex)];
+  const inputs: CovInputV1[] = [curveInput(k, tpl, utxo, curveCovid, 'init', args, (b) => { b.int(1n); pushTokenStateV1(b, tpl.token.templateHash, inventory); pushTokenStateV1(b, tpl.token.templateHash, devAlloc); b.data(tpl.token.prefix).data(tpl.token.suffix); b.data(genTxid).int(BigInt(genIndex)); })];
   const outputs: CovOutputV1[] = [
     covOut(utxo.realKas, curveV1Spk(k, newRedeem), 'curve', curveCovid, 0),
     covOut(dust, invSpk, 'inventory', tokenCovidHex, 0),
