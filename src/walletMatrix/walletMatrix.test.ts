@@ -67,7 +67,7 @@ const signInputsWallet = (who: Key, o: { sig?: (s65: string) => string } = {}) =
 const run = (w: WalletAdapter, extra: Partial<Parameters<typeof runWalletMatrix>[2]> = {}) => runWalletMatrix(k, w, { network: NET, build: 'FakeWallet 0.0.1 (test)', ...extra });
 const statuses = (r: WalletMatrixRecord) => r.results.map((x) => x.status);
 
-// The mass c/t/s of KRON's page shapes with the live programs (schema 6b7ec42cd29a), from KRON's own builders. KRON's page
+// The mass c/t/s of KRON's page shapes with the live programs (the token and curve of schema 6b7ec42cd29a are unchanged at de046fcd1374), from KRON's own builders. KRON's page
 // recorded the same transfers for Kastle and KasWare on krontest.xyz on 2026-10-27 (kron docs/kcc20-spike/WALLET-SIGNING.md),
 // and 124046/40592/318977 (sell) and 103534/40248/310106 (buy) with that day's curve, 120 bytes shorter: the singleton
 // proof in init (audit KV1-01) adds 145 compute and 290 transient mass to each curve shape.

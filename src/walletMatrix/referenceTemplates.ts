@@ -6,7 +6,7 @@ import type { ServerCompiledProgramV1 } from '../native/templatesV1.js';
 import type { FamilyCurveParamsInput } from '../client/templatesV1.js';
 
 export const REFERENCE_TEMPLATES_V1: { schema: string | null; params: FamilyCurveParamsInput; token: ServerCompiledProgramV1; curve: ServerCompiledProgramV1 } = {
- "schema": "6b7ec42cd29ac0d4ea7e055f75f6bcdef48ff4d3d8d1b7960ee0a643ceb727bc",
+ "schema": "de046fcd1374e65b8b92f5aae92b8185f96863e86eac3d583e70d7f6a8b6cd10",
  "params": {
   "creatorFeeOwner": "f4f6a5667475b3b52468751c478faad9ea15075c79adeca9f5288311ef176443",
   "platformFeeOwner": "e90f208fb3cf3a276404b8213af59fa30bff2aa1fb92cc2c7f433a9f0331d123",

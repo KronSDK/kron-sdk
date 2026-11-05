@@ -4,7 +4,7 @@
 — a bonding-curve launchpad + AMM DEX — from any JS/TS environment.** Browser or Node. No custody, ever:
 this package only *builds* transactions; a wallet (yours, or your user's) signs them.
 
-> **Status: v0.20.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
+> **Status: v0.21.0, mainnet.** Read paths and the covenant builders are proven byte-identical to
 > KRON's own production code (see "Verification" below). Wallet signing is a documented interface plus a
 > generic reference implementation — see [`docs/WALLETS.md`](docs/WALLETS.md) for the contract (which is
 > [KIP-12](https://github.com/kaspanet/kips/pull/44)) and how to adapt it to a specific wallet's injected
@@ -14,6 +14,9 @@ this package only *builds* transactions; a wallet (yours, or your user's) signs 
 > that either gets transactions **rejected on-chain** or produces a **wrong quote**. The floors, newest
 > first (full detail per version in the [CHANGELOG](CHANGELOG.md)):
 >
+> - **≤ 0.20.0** — `buildPoolV1Genesis` refuses a pool past 1,000,000,000 raw token units, the limit of KRON's open pool until
+>   schema `de046fcd1374`, and nothing checks a deposit or sale against a pool's own limit, so one past an older pool's limit
+>   is **rejected on-chain**. 0.21.0 reads each pool's bounds from its version.
 > - **0.18.0** — has the recipient-bound ABI but selects it from an **optional** template flag that defaults
 >   to legacy when unset, so a template you shaped by hand silently builds legacy transactions that
 >   recipient-bound tokens reject with `pick at an invalid location`. 0.18.1 adds `client.fetchCpTemplates`,
@@ -111,7 +114,7 @@ ESM only (`"type": "module"`) in v1 — see [Design notes](#design-notes) for wh
 
 ```bash
 npm install @kronsdk/kron-sdk@latest      # newest
-npm install @kronsdk/kron-sdk@0.20.0      # or pin an exact version for reproducible builds
+npm install @kronsdk/kron-sdk@0.21.0      # or pin an exact version for reproducible builds
 ```
 
 The package follows semver — **just install `@latest`**; there's no reason to pin an older release. The token-list client (`client.RegistryClient.tokenlist()`) and on-chain verifier

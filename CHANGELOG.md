@@ -3,6 +3,31 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## 0.21.0
+
+### Changed: imported tokens' pools have no practical token limit (schema `de046fcd1374`)
+
+KRON's `pool_open_kcc20` program now holds up to 4e18 raw token units, not 1e9, so tokens with many decimals can be pooled (1e9
+raw units is only 10 whole tokens at 8 decimals). A pool keeps the program it was created with: pools on earlier schemas keep
+1e9. Dispatch tags, state layout, entries and quotes are unchanged, and so are the token, curve, locked pool and order programs.
+
+- `poolKcc20.poolBoundsV1(program, schema)` reads a program version's bounds. `poolTemplateFromCompiledV1` takes the pool's
+  `templateSchema` as a fifth argument and exposes `template.bounds`; pass it when you trade on or deposit into an existing pool.
+- `buildPoolV1Genesis` refuses by the template's bounds.
+- New helpers: `addWithinBoundsV1`, `maxAddKasUnitsV1` and `sellRoomV1` take a bounds argument, so a deposit or sale the program
+  would refuse can be stopped before it is signed.
+- Reserves can pass 2^53. Read them as the decimal strings KRON serves, never as JSON numbers.
+
+KRON's mainnet has run this schema since 2026-11-05, and it is approved for launches. What changed on KRON's side:
+
+- A client still on 0.20 keeps working: it reads a pool's template from the registry, so a new pool's program reaches it like any
+  other. Its `buildPoolV1Genesis` refuses a genesis past 1e9, and it has no check of a deposit or sale against an older pool's
+  bound, so one past that bound is rejected on chain.
+- KRON's registry proves a new pool's genesis under the current program, then under `6b7ec42cd29a`, and the record names the one
+  that proved it, with that version's bounds.
+- Once a new pool has a tick, `GET /head` hands out nothing kept from the old one: `head` and `hint` are null until the new
+  pool's first sequenced trade.
+
 ## 0.20.0
 
 ### Added — the KCC-20 STANDARD token family (`kcc20v1`)

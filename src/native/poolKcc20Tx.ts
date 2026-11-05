@@ -46,7 +46,7 @@ const noBlake3: Blake3 = () => { throw new Error('a p2pkh-schnorr piece needs a 
 
 /** Fixed per-pool parameters (baked by silverc) — the audited PoolCpParams shape, so the quotes apply unchanged. */
 export type PoolV1Params = { creatorFeeOwner: Uint8Array; platformFeeOwner: Uint8Array; creatorFeeBps: bigint; platformFeeBps: bigint; lpFeeBps: bigint; lockedShares: bigint };
-export type PoolV1Template = { prefix: Uint8Array; suffix: Uint8Array; templateHash: Uint8Array; tags: Record<string, Uint8Array>; params: PoolV1Params; token: Kcc20V1Template; program?: PoolProgramV1 };
+export type PoolV1Template = { prefix: Uint8Array; suffix: Uint8Array; templateHash: Uint8Array; tags: Record<string, Uint8Array>; params: PoolV1Params; token: Kcc20V1Template; program?: PoolProgramV1; bounds: PoolV1Bounds };
 /** An OPEN pool (pool_open_kcc20.sil): nothing locked, lockedShares 0. */
 export const isOpenPoolV1 = (tpl: Pick<PoolV1Template, 'program'>): boolean => tpl.program === 'poolOpen';
 export type PoolV1State = { kasReserve: bigint; tokenReserve: bigint; tokenCovid: Uint8Array; totalShares: bigint; lpCovid: Uint8Array };
@@ -56,12 +56,12 @@ export type PoolV1Utxo = { transactionId: string; index: number; state: PoolV1St
 export type LpInventoryUtxoV1 = { transactionId: string; index: number; value: bigint; amount: bigint; extensionCommitment?: Uint8Array };
 export type TokenUtxoV1 = { transactionId: string; index: number; value: bigint; state: Kcc20V1State };
 
-export function poolTemplateFromCompiledV1(c: CompiledV1, params: PoolV1Params, token: Kcc20V1Template, program: PoolProgramV1 = 'pool'): PoolV1Template {
+export function poolTemplateFromCompiledV1(c: CompiledV1, params: PoolV1Params, token: Kcc20V1Template, program: PoolProgramV1 = 'pool', schema: string | null = null): PoolV1Template {
   const tags = assertFamilyTagsV1(program, c.dispatchTags);
   if (program === 'poolOpen' ? params.lockedShares !== 0n : params.lockedShares < 1n) throw new Error(program === 'poolOpen' ? 'an open pool has no locked shares (lockedShares must be 0)' : 'a LOCKED pool needs lockedShares >= 1 (0 is the open program)');
   if (c.stateSpan.offset !== 1 || c.stateSpan.len !== POOL_V1_STATE_LEN) throw new Error(`pool state span {${c.stateSpan.offset},${c.stateSpan.len}} is not {1,93}`);
   if (!c.bytecodeHex.includes(hexOf(token.templateHash))) throw new Error('this pool was not compiled against the given token template');
-  return { prefix: c.prefix, suffix: c.suffix, templateHash: hexToBytes(c.templateHash), tags, params, token, program };
+  return { prefix: c.prefix, suffix: c.suffix, templateHash: hexToBytes(c.templateHash), tags, params, token, program, bounds: poolBoundsV1(program, schema) };
 }
 export const encodePoolV1State = (s: PoolV1State): Uint8Array => {
   if (s.tokenCovid.length !== 32 || s.lpCovid.length !== 32) throw new Error('pool covenant ids must be 32 bytes');
@@ -113,6 +113,38 @@ export function quoteAddLiquidityExactV1(state: Pick<PoolV1State, 'kasReserve' |
   if (dToken < 1n) return null;
   return { dKas, dToken, dShares, newKas: K + dKas, newToken: T + dToken, newShares: S + dShares };
 }
+
+/** The family pool programs' reserve bounds (MAX_UNITS / MAX_TOKEN). They count raw units, and MAX_TOKEN is per program version,
+ *  since a pool keeps the program it was created with: the LOCKED program and the OPEN one up to 6b7ec42cd29a hold 1e9, the OPEN
+ *  one from de046fcd1374 holds 4e18. A sell's change piece is bounded by MAX_TOKEN as well. Pass a pool's own `templateSchema`
+ *  to `poolTemplateFromCompiledV1`, or read its bounds here. */
+export type PoolV1Bounds = { maxUnits: bigint; maxToken: bigint };
+export const POOL_V1_MAX_UNITS = 900_000_000n;
+export const POOL_V1_MAX_TOKEN_CAPPED = 1_000_000_000n;
+export const POOL_V1_MAX_TOKEN_WIDE = 4_000_000_000_000_000_000n;
+const CAPPED_OPEN_SCHEMAS_V1 = new Set(['6509b4fb3f38', 'aef9d6ae0e3d', '6b7ec42cd29a']);
+/** The bounds of a program version. No `schema` = the current sources, the program a new pool is created on. */
+export const poolBoundsV1 = (program: PoolProgramV1, schema?: string | null): PoolV1Bounds => ({
+  maxUnits: POOL_V1_MAX_UNITS,
+  maxToken: program === 'poolOpen' && !CAPPED_OPEN_SCHEMAS_V1.has(String(schema ?? '').toLowerCase().slice(0, 12)) ? POOL_V1_MAX_TOKEN_WIDE : POOL_V1_MAX_TOKEN_CAPPED,
+});
+type AddQuoteV1 = { dKas: bigint; dToken: bigint; dShares: bigint; newKas: bigint; newToken: bigint; newShares: bigint };
+/** Whether an addLiquidity quote stays inside the program's bounds (the VM refuses it otherwise). */
+export const addWithinBoundsV1 = (q: AddQuoteV1, b: PoolV1Bounds): boolean =>
+  q.dKas <= b.maxUnits && q.dToken <= b.maxToken && q.dShares <= MAX_SHARES && q.newKas <= b.maxUnits && q.newToken <= b.maxToken && q.newShares < MAX_SHARES;
+/** The largest deposit budget (KAS units) whose quote the pool still takes, or 0n when it is full. `quote` is the pool's own
+ *  (quoteAddLiquidityExactV1 for an open pool, quoteAddLiquidityV1 for a locked one). */
+export function maxAddKasUnitsV1<S extends Pick<PoolV1State, 'kasReserve' | 'tokenReserve' | 'totalShares'>>(state: S, b: PoolV1Bounds, quote: (s: S, d: bigint) => AddQuoteV1 | null = quoteAddLiquidityExactV1): bigint {
+  const K = state.kasReserve, S = state.totalShares;
+  if (K < 1n || state.tokenReserve < 1n || S < 1n || K >= b.maxUnits) return 0n;
+  const fits = (d: bigint): boolean => { try { const q = quote(state, d); return !!q && addWithinBoundsV1(q, b); } catch { return false; } };
+  let lo = (K + S - 1n) / S, hi = b.maxUnits - K; // lo: the least budget that mints one share
+  if (lo > hi || !fits(lo)) return 0n;
+  while (lo < hi) { const mid = (lo + hi + 1n) / 2n; if (fits(mid)) lo = mid; else hi = mid - 1n; }
+  return lo;
+}
+/** How many more raw token units a sell can put into the pool before its reserve passes MAX_TOKEN. */
+export const sellRoomV1 = (state: Pick<PoolV1State, 'tokenReserve'>, b: PoolV1Bounds): bigint => (state.tokenReserve < b.maxToken ? b.maxToken - state.tokenReserve : 0n);
 
 /** swapKasForToken: the trader's KAS buys `q.tokenOut`, minted as ONE new default holder piece (no merge here).
  *  Outputs [pool, pool token, trader token, creator fee (incl. floor rent), platform fee]. */
@@ -258,8 +290,8 @@ export function buildPoolV1Genesis(k: K, tpl: PoolV1Template, tokenCovid: Uint8A
   const dust = opts.tokenDust ?? COVENANT_DUST, blake3Of = opts.blake3 ?? noBlake3;
   if (tokenCovid.length !== 32 || tokenCovid.every((b) => b === 0)) throw new Error('tokenCovid must be a non-zero 32-byte covenant id');
   if (pieces.length < 1 || pieces.length > MAX_TRADER_PIECES) throw new Error(`a pool genesis spends 1..${MAX_TRADER_PIECES} of the seeder's pieces`);
-  if (k0 < 1n || k0 > 900_000_000n) throw new Error('k0 must be 1..900,000,000 KAS units (SCALE 1e6 sompi)');
-  if (t0 < 1n || t0 > 1_000_000_000n) throw new Error('t0 must be 1..1,000,000,000 tokens');
+  if (k0 < 1n || k0 > tpl.bounds.maxUnits) throw new Error(`k0 must be 1..${tpl.bounds.maxUnits} KAS units (SCALE 1e6 sompi)`);
+  if (t0 < 1n || t0 > tpl.bounds.maxToken) throw new Error(`t0 must be 1..${tpl.bounds.maxToken} raw token units`);
   const locked = tpl.params.lockedShares;
   if (!isOpenPoolV1(tpl) && (locked < 1n || locked >= MAX_SHARES)) throw new Error('lockedShares must be 1..MAX_SHARES-1 (bindLp requires it)');
   for (const p of pieces) assertHolderPieceV1(p.state, seederPubkey, blake3Of);

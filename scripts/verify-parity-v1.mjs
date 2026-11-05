@@ -151,10 +151,23 @@ same(R.pool.quoteAddLiquidityExactV1({ kasReserve: 5000n, tokenReserve: 100_000n
 for (const k0 of [1n, 2_500n, 4_999_999n, 5_000_000n, 9_000_000n]) same(R.pool.openSeedSharesV1(k0), D.pool.openSeedSharesV1(k0), `openSeedSharesV1(${k0})`);
 for (const [p, k0, t0] of [['poolOpen', 2_500n, 100_000n], ['poolOpen', 9_000_000n, 100_000n], ['poolExt', 2_500n, 100_000n]]) same(R.pool.poolV1GenesisState(T.ref[p], A, k0, t0), D.pool.poolV1GenesisState(T.sdk[p], A, k0, t0), `poolV1GenesisState(${p}, ${k0}, ${t0})`);
 same([R.pool.isOpenPoolV1(T.ref.poolOpen), R.pool.isOpenPoolV1(T.ref.pool)], [D.pool.isOpenPoolV1(T.sdk.poolOpen), D.pool.isOpenPoolV1(T.sdk.pool)], 'isOpenPoolV1 (open, LOCKED)');
+// the bounds, per program version: the table, and the helpers over a reserve past 2^53
+for (const [p, sc] of [['poolOpen', null], ['poolOpen', '6b7ec42cd29ac0d4ea7e055f75f6bcdef48ff4d3d8d1b7960ee0a643ceb727bc'], ['poolOpen', 'de046fcd1374e65b8b92f5aae92b8185f96863e86eac3d583e70d7f6a8b6cd10'], ['pool', null]]) same(R.pool.poolBoundsV1(p, sc), D.pool.poolBoundsV1(p, sc), `poolBoundsV1(${p}, ${sc?.slice(0, 12)})`);
+{
+  const wide = R.pool.poolBoundsV1('poolOpen'), capped = R.pool.poolBoundsV1('pool');
+  const st = { kasReserve: 800_000_000n, tokenReserve: 3_900_000_000_000_000_001n, totalShares: 5_000_000n };
+  const q = R.pool.quoteAddLiquidityExactV1(st, 8_000_000n);
+  same(q, D.pool.quoteAddLiquidityExactV1(st, 8_000_000n), 'quoteAddLiquidityExactV1 past 2^53');
+  for (const b of [wide, capped]) {
+    same(R.pool.addWithinBoundsV1(q, b), D.pool.addWithinBoundsV1(q, b), 'addWithinBoundsV1');
+    same(R.pool.maxAddKasUnitsV1(st, b), D.pool.maxAddKasUnitsV1(st, b), 'maxAddKasUnitsV1');
+    same(R.pool.sellRoomV1(st, b), D.pool.sellRoomV1(st, b), 'sellRoomV1');
+  }
+}
 for (const [mass, rate] of [[1n, 100], [10_000n, 100], [123_456n, 250], [500_000n, 1]]) same(R.l1Fee.feeForMass(mass, rate), D.l1Fee.feeForMass(mass, rate), `feeForMass(${mass}, ${rate})`);
 for (const b of [0n, 100n, 4_000n, 65_535n]) same(R.l1Fee.normalizedTransientMass(b), D.l1Fee.normalizedTransientMass(b), `normalizedTransientMass(${b})`);
 for (const [b, r] of [[647, 100], [4031, 100], [14651, 250]]) same(R.l1Fee.estimateCovenantL1Fee(b, r), D.l1Fee.estimateCovenantL1Fee(b, r), `estimateCovenantL1Fee(${b}, ${r})`);
-const consts = { curve: ['MAX_TOKEN', 'MAX_MERGE_PIECES', 'MAX_SELL_PIECES', 'MAX_BATCH', 'CURVE_V1_STATE_LEN', 'SCALE'], pool: ['POOL_V1_STATE_LEN', 'MAX_TRADER_PIECES', 'MAX_SHARES', 'MAX_SEED_SHARES', 'OPEN_POOL_MIN_KAS_SOMPI'], order: ['ORDER_V1_STATE_LEN', 'MIN_ORDER_KAS', 'ORDER_TOKEN_DUST', 'ORDER_TX_FEE'], transfer: ['COVENANT_DUST_V1', 'MAX_TRANSFER_PIECES'], kcc20V1: ['KCC20V1_STATE_LEN', 'KCC20V1_STATE_OFFSET', 'OWNER_SCHEME', 'BORROW_SCHEME', 'SIG65_LEN', 'KCC20V1_FRAMING'], covenant: ['TX_VERSION', 'SUBNET_ZERO', 'MASS_CAP', 'FUNDING_COMPUTE_V1', 'CURVE_V1_COMPUTE', 'POOL_V1_COMPUTE', 'ORDER_V1_COMPUTE', 'TOKEN_V1_COMPUTE'], l1Fee: ['TRANSIENT_BYTE_TO_MASS_FACTOR', 'COMPUTE_MASS_LIMIT', 'TRANSIENT_MASS_LIMIT', 'FEE_BUFFER_NUM', 'FEE_BUFFER_DEN', 'MIN_FEE_SOMPI', 'MIN_FEE_RATE'] };
+const consts = { curve: ['MAX_TOKEN', 'MAX_MERGE_PIECES', 'MAX_SELL_PIECES', 'MAX_BATCH', 'CURVE_V1_STATE_LEN', 'SCALE'], pool: ['POOL_V1_STATE_LEN', 'MAX_TRADER_PIECES', 'MAX_SHARES', 'MAX_SEED_SHARES', 'OPEN_POOL_MIN_KAS_SOMPI', 'POOL_V1_MAX_UNITS', 'POOL_V1_MAX_TOKEN_CAPPED', 'POOL_V1_MAX_TOKEN_WIDE'], order: ['ORDER_V1_STATE_LEN', 'MIN_ORDER_KAS', 'ORDER_TOKEN_DUST', 'ORDER_TX_FEE'], transfer: ['COVENANT_DUST_V1', 'MAX_TRANSFER_PIECES'], kcc20V1: ['KCC20V1_STATE_LEN', 'KCC20V1_STATE_OFFSET', 'OWNER_SCHEME', 'BORROW_SCHEME', 'SIG65_LEN', 'KCC20V1_FRAMING'], covenant: ['TX_VERSION', 'SUBNET_ZERO', 'MASS_CAP', 'FUNDING_COMPUTE_V1', 'CURVE_V1_COMPUTE', 'POOL_V1_COMPUTE', 'ORDER_V1_COMPUTE', 'TOKEN_V1_COMPUTE'], l1Fee: ['TRANSIENT_BYTE_TO_MASS_FACTOR', 'COMPUTE_MASS_LIMIT', 'TRANSIENT_MASS_LIMIT', 'FEE_BUFFER_NUM', 'FEE_BUFFER_DEN', 'MIN_FEE_SOMPI', 'MIN_FEE_RATE'] };
 for (const [ns, names] of Object.entries(consts)) for (const n of names) same(R[ns][n], D[ns][n], `${ns}.${n}`);
 
 // --- the shapes: both sides build, assemble and sign the same list from the same inputs ----------------------------------

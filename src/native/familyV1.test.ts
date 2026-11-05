@@ -14,7 +14,7 @@ import { p2pkOwnedV1, ZERO32, kcc20V1SpkForState, pushKcc20V1States, materialize
 import { SigScriptBuilder } from './sigscript.js';
 import { buildCurveV1Genesis, buildCurveV1Init, buildCurveV1Buy, buildCurveV1Sell, buildCurveV1Graduate, buildCurveV1BatchBuy, MAX_MERGE_PIECES, MAX_SELL_PIECES } from './curveKcc20Tx.js';
 import { buildPoolV1SwapKasForToken, buildPoolV1SwapTokenForKas, buildPoolV1AddLiquidity, buildPoolV1RemoveLiquidity, buildPoolV1BindLp, MAX_SHARES, MAX_TRADER_PIECES } from './poolKcc20Tx.js';
-import { poolTemplateFromCompiledV1, buildPoolV1Genesis, buildPoolV1BindLpOpen, buildPoolV1ClosePool, poolV1GenesisState, quoteAddLiquidityExactV1, isOpenPoolV1, MAX_SEED_SHARES, type PoolV1Template } from './poolKcc20Tx.js';
+import { poolTemplateFromCompiledV1, buildPoolV1Genesis, buildPoolV1BindLpOpen, buildPoolV1ClosePool, poolV1GenesisState, quoteAddLiquidityExactV1, isOpenPoolV1, MAX_SEED_SHARES, type PoolV1Template, poolBoundsV1, addWithinBoundsV1, sellRoomV1 } from './poolKcc20Tx.js';
 import { compiledFromServerV1 } from './templatesV1.js';
 import { buildOrderV1Refund, orderEscrowV1 } from './orderKcc20Tx.js';
 import { buildTokenTransferV1, MAX_TRANSFER_PIECES } from './transferKcc20Tx.js';
@@ -179,6 +179,20 @@ describe('an imported token\'s pool (pool_open_kcc20.sil, audit KV1-02..05)', ()
     expect(Object.keys(OPEN.tags).sort()).toEqual(['addLiquidity', 'bindLpOpen', 'closePool', 'removeLiquidity', 'swapKasForToken', 'swapTokenForKas']);
     expect(() => poolTemplateFromCompiledV1(compiledFromServerV1('poolOpen', FX.standalone.poolOpen), { ...OPEN.params, lockedShares: 1000n }, T.token, 'poolOpen')).toThrow(/no locked shares/);
     expect(() => poolTemplateFromCompiledV1(compiledFromServerV1('pool', FX.standalone.pool), { ...OPEN.params, lockedShares: 0n }, T.token, 'pool')).toThrow(/lockedShares >= 1/);
+  });
+  it('the token bound is the program version\'s: 4e18 raw units now, 1e9 on 6b7ec42cd29a and on the locked program', () => {
+    const OLD = '6b7ec42cd29ac0d4ea7e055f75f6bcdef48ff4d3d8d1b7960ee0a643ceb727bc';
+    expect(OPEN.bounds.maxToken).toBe(4_000_000_000_000_000_000n);
+    expect(poolBoundsV1('poolOpen', OLD).maxToken).toBe(1_000_000_000n);
+    expect(poolBoundsV1('pool').maxToken).toBe(1_000_000_000n);
+    const capped = poolTemplateFromCompiledV1(compiledFromServerV1('poolOpen', FX.standalone.poolOpen), OPEN.params, T.token, 'poolOpen', OLD);
+    expect(capped.bounds.maxToken).toBe(1_000_000_000n);
+    const q = quoteAddLiquidityExactV1({ kasReserve: 800_000_000n, tokenReserve: 3_900_000_000_000_000_001n, totalShares: 5_000_000n }, 8_000_000n)!;
+    expect(q.dToken).toBe((3_900_000_000_000_000_001n * 50_000n + 4_999_999n) / 5_000_000n);
+    expect(addWithinBoundsV1(q, OPEN.bounds)).toBe(true);
+    expect(addWithinBoundsV1(q, capped.bounds)).toBe(false);
+    expect(sellRoomV1({ tokenReserve: 1_000_000_000n }, capped.bounds)).toBe(0n);
+    expect(sellRoomV1({ tokenReserve: 1_000_000_000n }, OPEN.bounds)).toBe(3_999_999_999_000_000_000n);
   });
   it('genesis shares are min(k0, 5,000,000): a sole seeder never takes the whole share space (KV1-04)', () => {
     expect(poolV1GenesisState(OPEN, A, 2_500n, 100_000n).totalShares).toBe(2_500n);

@@ -514,7 +514,7 @@ family builders refuse a template whose compiled dispatch tags disagree with the
 
 This family is **not audited** (pre-audit; KRON's audit scope and findings ledger live in the kron repo) and
 its mainnet rollout is gated by KRON's registry pre-flight. `npm run verify:parity:v1` proves these builders
-byte-identical to KRON's reference over 26 production shapes, at KRON's live covenant version (schema `6b7ec42cd29a`).
+byte-identical to KRON's reference over 26 production shapes, at KRON's current covenant version (schema `de046fcd1374`).
 
 **Imported tokens' pools.** KRON also pools KCC-20 tokens launched elsewhere, when their token program is a build
 KRON knows. Such a pool has no curve and no order covenant. Every new one runs `pool_open_kcc20` (template
@@ -522,10 +522,19 @@ KRON knows. Such a pool has no curve and no order covenant. Every new one runs `
 every share can close the pool (`poolKcc20.buildPoolV1ClosePool`). Its template is the registry's pool-only compile,
 `POST /api/native/kcc20v1-template` with `build` (the known build's id), whose answer carries `program`, `pool` and `build`:
 shape it with `templatesV1.compiledFromServerV1(program, pool)` and
-`poolKcc20.poolTemplateFromCompiledV1(compiled, params, tokenTemplate, program)`, where the token template is the
-token's own program, served by the indexer at `GET /v1/kcc20/token/{tick}/program`. The swaps, deposits and
+`poolKcc20.poolTemplateFromCompiledV1(compiled, params, tokenTemplate, program, pool.templateSchema)`, where the token
+template is the token's own program, served by the indexer at `GET /v1/kcc20/token/{tick}/program`. The swaps, deposits and
 withdrawals are the pool builders above. Deposits into an open pool are exact (`quoteAddLiquidityExactV1`), and a
 swap with no creator fee due pays the creator's output slot back to the trader.
+
+**Pool bounds.** A pool keeps the program it was created with, and its record's `templateSchema` names it. The open program
+from schema `de046fcd1374` holds up to 4,000,000,000,000,000,000 raw token units. Earlier open programs and the locked program
+hold 1,000,000,000 raw units, which is only 10 whole tokens at 8 decimals. All of them hold up to 900,000,000 units of 0.01 KAS
+and under 10,000,000 shares. `poolKcc20.poolBoundsV1(program, schema)` reads them, and `template.bounds` carries them when you
+pass the schema; check `addWithinBoundsV1`, `maxAddKasUnitsV1` and `sellRoomV1` before you sign, because the program refuses
+what passes them. Reserves can pass 2^53, so read them as the decimal strings KRON serves, never as JSON numbers.
+KRON's registry proves a genesis under the current program, then under `6b7ec42cd29a`, the version an older client still
+builds; the record names the one that proved it, and its bounds are that version's.
 
 ### Covenant transactions are v1 (bindings + compute budgets) — REQUIRED
 
@@ -621,6 +630,10 @@ the CORS table).
 The pool endpoints are keyed by the **token tick** (e.g. `pepe`), never the pool P2SH — the pool's
 address moves with its state (`lpCovid` bind, `totalShares` changes), so the tick is the stable key.
 Earlier releases of this doc and `SequencerClient` said `poolP2SH`; a P2SH has never matched.
+
+A tick's pool can change. When a pool closes or is delisted, `GET /head` answers `{ ok: false, reason: "no live pool" }`. Once a
+new pool has the tick, it hands out nothing kept from the old one: `head` and `hint` are null until the new pool's first
+sequenced trade.
 
 `/status` and `/curve/status` return `{ ok, known, state, txid }` with `state` one of `broadcasting`,
 `accepted`, `rejected`, `broadcast-ambiguous`, `confirmed`, `dropped` (chain evicted), or `unknown` (never
