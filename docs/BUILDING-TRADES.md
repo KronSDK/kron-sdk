@@ -218,17 +218,24 @@ the path.
 
 ## Partner attribution (integrator program)
 
-If you're in KRON's wallet-integrator program, tag your trades so your volume is credited. Pass your partner
-tag as `ref` when you assemble:
+If you're in KRON's wallet-integrator program, tag your trades so your volume is credited. How you pass your
+partner tag depends on the token's family:
 
 ```ts
+// KRON family: the assembler takes the tag
 const asm = kron.spend.assembleNativeTx(k, {
   spend, fundingEntries, changeAddress, networkFee,
   ref: 'yourtag',
 });
+
+// KCC-20 standard family (standard launches, imported tokens' pools): it takes the encoded payload
+const asmV1 = kron.covenantV1.assembleFamilyTx(k, {
+  spend, fundingEntries, changeAddress, networkFee, networkId,
+  payload: kron.partnerTag.encodePartnerTag('yourtag'),
+});
 ```
 
-That writes `kron:r:<tag>` into the transaction payload. Two things follow from it being *in the transaction*
+Both write `kron:r:<tag>` into the transaction payload. Two things follow from it being *in the transaction*
 rather than reported at submit time:
 
 **Route freely.** The tag is captured whether you relay via the sequencer or submit straight to a node. Pick
@@ -259,6 +266,9 @@ Notes worth knowing:
   Reference behavior: `kron.spend.signPsktWithKey`. Raw-key server-side signers are unaffected.
 - The tag is unauthenticated: it's an auditable claim, not proof. Settlement is manual review.
 - Use the **same tag** as the one on your dashboard account — settlement joins on it.
+- On the KCC-20 standard family, check that your first tagged trade appears at the address above, and pass the
+  sequencer-side `ref` as well until it does: [INTEGRATION.md § Partner attribution](INTEGRATION.md#partner-attribution).
+- A swap on a delisted pool writes no trade row, so it earns no credit.
 - Migrating from the sequencer-side `ref` field (pre-0.13.0)? It still records, and KRON merges both
   attribution sources deduped by txid — nothing double-counts. But that path only ever sees
   sequencer-routed trades, so the payload tag is the one that always counts; passing both during the

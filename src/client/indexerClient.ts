@@ -35,6 +35,14 @@ export type TokenInfo = {
   trades24h?: number; tradesTotal?: number; tvl?: number; reserveKas?: string;
 };
 
+/** A row of `GET /v1/kcc20/markets`. It is a summary, not the whole token row: read `cpState` and `curveCovenantId` from `token()`.
+ *  `poolCovenantId` is the pool holding the token's market, null while it trades on its curve or has no pool. It and `tradable` are
+ *  absent on an indexer from before them, which is why `tradable` is optional; there, `kind: 'pool'` returns only tokens on a pool. */
+export type MarketRow = TokenInfo & {
+  /** Whether KRON has a market for the token that you can quote and trade against now. */
+  tradable?: boolean;
+};
+
 export type Balance = { tick: string; balance: string; dec: number };
 export type TokenUtxo = {
   outpoint: { transactionId: string; index: number };
@@ -73,7 +81,7 @@ export class IndexerClient {
   constructor(private baseUrl: string) {}
 
   info(): Promise<IndexerInfo> { return fetchJson(`${this.baseUrl}/info`); }
-  markets(opts: { kind?: 'curve' | 'pool' } = {}): Promise<TokenInfo[]> { return fetchJson(`${this.baseUrl}/markets${qs(opts)}`); }
+  markets(opts: { kind?: 'curve' | 'pool' } = {}): Promise<MarketRow[]> { return fetchJson(`${this.baseUrl}/markets${qs(opts)}`); }
   topTraders(): Promise<unknown[]> { return fetchJson(`${this.baseUrl}/top-traders`); }
 
   token(tick: string): Promise<TokenInfo> { return fetchJson(`${this.baseUrl}/token/${encodeURIComponent(tick)}`); }

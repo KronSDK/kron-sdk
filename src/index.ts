@@ -20,8 +20,9 @@ export * as curve from './curve/cpCurve.js';
 export * as sigscript from './native/sigscript.js';
 export * as genesis from './native/genesis.js';
 export * as spend from './native/spend.js';
-/** On-chain partner attribution tag (encode/parse + REF_RE). Pass `ref` to `spend.assembleNativeTx` to tag a
- *  trade; use `parsePartnerTag` to read a tag back off a transaction payload from chain. */
+/** On-chain partner attribution tag (encode/parse + REF_RE). To tag a trade, pass `ref` to `spend.assembleNativeTx`, or on the
+ *  standard family `payload: encodePartnerTag(ref)` to `covenantV1.assembleFamilyTx`; use `parsePartnerTag` to read a tag back
+ *  off a transaction payload from chain. */
 export * as partnerTag from './native/partnerTag.js';
 /** Covenant UTXO SELECTION — read this before writing your own. A KCC-20 UTXO's native KAS value is not
  *  part of its identity and is not predictable: no covenant pins it, and a different implementation may

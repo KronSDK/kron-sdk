@@ -119,6 +119,13 @@ GET /v1/kcc20/top-traders                    # global volume leaderboard
 `info` → `{ result: { tokenTotal, daaScore, synced, network } }`. Poll `synced` before trusting freshness;
 `daaScore` is the chain point the view reflects.
 
+A `markets` row is a summary, so read `cpState` and the curve's id from the token row below. Newer indexers add two fields to
+every row. `tradable` is `true` when KRON has a market for the token that you can quote and trade against now. `poolCovenantId`
+is the pool holding that market, `null` while a token trades on its curve or has no pool. So `true` with a pool id trades on that
+pool, `true` with `null` trades on its curve, and `false` has no KRON market. Read the flag rather than `reserveKas` or `tvl`: a
+retired pool's token can still show a small balance there. Where the fields are absent (an indexer from before them),
+`?kind=pool` returns only tokens on a pool.
+
 ### Token metadata + live state — the big one
 
 ```
@@ -498,7 +505,8 @@ family builders refuse a template whose compiled dispatch tags disagree with the
    holder's signature goes.
 4. **Assemble + fee:** `kron.covenantV1.assembleFamilyTx(k, { spend, fundingEntries, changeAddress, networkFee,
    networkId })` (pass `networkId` — the wallet request needs each input's address), `covenantV1.feeForTxV1`
-   for the fee, then re-assemble with it (same rule as the KRON family: never sign the guess-fee assembly).
+   for the fee, then re-assemble with it (same rule as the KRON family: never sign the guess-fee assembly). To tag the trade for
+   [partner attribution](#partner-attribution), add `payload: kron.partnerTag.encodePartnerTag('yourtag')` to both assemblies.
    `covenantV1.massDimsV1` / `withinCapsV1` tell you before signing whether the shape fits the 500k caps.
 5. **Sign:** `kron.spendV1.signWithWalletV1(k, wallet, asm, spend, { networkId })`. The holder's token pieces
    are **P2SH inputs the wallet must sign with the account key** (their witness carries the holder's 65-byte
@@ -533,8 +541,9 @@ hold 1,000,000,000 raw units, which is only 10 whole tokens at 8 decimals. All o
 and under 10,000,000 shares. `poolKcc20.poolBoundsV1(program, schema)` reads them, and `template.bounds` carries them when you
 pass the schema; check `addWithinBoundsV1`, `maxAddKasUnitsV1` and `sellRoomV1` before you sign, because the program refuses
 what passes them. Reserves can pass 2^53, so read them as the decimal strings KRON serves, never as JSON numbers.
-KRON's registry proves a genesis under the current program, then under `6b7ec42cd29a`, the version an older client still
-builds; the record names the one that proved it, and its bounds are that version's.
+KRON's registry proves a genesis under the current program, then under `6b7ec42cd29a`, the version a stale page or a script
+asking for it still builds. A new pool on that earlier version is recorded unlisted, withdraw only, and the record names the
+version. Pools already listed on it keep their program, their bounds and their listing.
 
 ### Covenant transactions are v1 (bindings + compute budgets) — REQUIRED
 
@@ -683,14 +692,17 @@ id** instead of the tick:
 ### Partner attribution
 
 Wallet-integrator partners ([kron.technology/wallets](https://kron.technology/wallets)) tag their trades
-**in the transaction itself**: pass your assigned partner tag as the optional `ref` when you assemble
-(SDK ≥ 0.13.0):
+**in the transaction itself**. How you pass your assigned partner tag depends on the token's family:
 
 ```ts
+// KRON family (SDK ≥ 0.13.0): the assembler takes the tag
 const asm = kron.spend.assembleNativeTx(k, { spend, fundingEntries, changeAddress, networkFee, ref: 'yourtag' });
+
+// KCC-20 standard family, imported tokens' pools included (SDK ≥ 0.20.0): it takes the encoded payload
+const asmV1 = kron.covenantV1.assembleFamilyTx(k, { spend, fundingEntries, changeAddress, networkFee, networkId, payload: kron.partnerTag.encodePartnerTag('yourtag') });
 ```
 
-That writes `kron:r:<tag>` into the transaction payload, so the trade is credited **whichever route it
+Both write `kron:r:<tag>` into the transaction payload, so the trade is credited **whichever route it
 takes** — sequencer or direct-to-node. Route for latency and reliability; it no longer affects whether you
 get paid. Your credited volume is auditable straight from chain, without trusting KRON's books:
 
@@ -700,9 +712,15 @@ GET https://idx.kron.technology/v1/kcc20/attribution?ref=yourtag
 ```
 
 The tag is 2–32 chars of `a-z 0-9 - _` (`kron.partnerTag.REF_RE`). Validate it at your configuration
-boundary — `assembleNativeTx` silently drops an invalid tag to an empty payload (an untaggable trade must
+boundary — `assembleNativeTx` and `encodePartnerTag` silently drop an invalid tag to an empty payload (an untaggable trade must
 still build), and a dropped tag earns nothing. Cost, security model, and settlement details:
 [BUILDING-TRADES.md § Partner attribution](BUILDING-TRADES.md#partner-attribution-integrator-program).
+
+**Standard-family credit.** The tag is valid on every standard-family trade, because no program reads `payload`. KRON's indexer
+credits it on that family only from the release that added this, so check that your first tagged trade appears at
+`/attribution?ref=yourtag`. If it doesn't yet, also pass `ref` on `submit()`/`curveSubmit()`, which the sequencer records; a tagged
+trade made in the meantime is credited by a backfill from chain. A swap on a delisted pool writes no trade row, so it earns no
+credit.
 
 **Known wallet limitation — browser signing and `payload`** (reported by kascov, 2026-08-10). Kaspa commits
 `tx.payload` to the signature hash, so the tag must be present *before* the transaction is signed and must
@@ -719,12 +737,14 @@ on tagged trades:
 Reference behavior is `kron.spend.signPsktWithKey` (`src/native/spend.ts`): deserialize the Safe-JSON, sign
 the listed inputs, re-serialize, never rebuild the transaction. Server-side signers holding a raw key are
 unaffected, which is why this does not surface in backend integrations. KIP-12 states the rule as a wallet
-**MUST** (Transaction Signing for Covenants).
+**MUST** (Transaction Signing for Covenants). The standard family's `signWithWalletV1` commits to the same hash, and KRON has so
+far run a tagged standard-family trade only with a raw-key signer, so try one through your wallet before you rely on it.
 
 **Legacy sequencer-side `ref` (pre-0.13.0).** The optional `ref` field on `submit()`/`curveSubmit()` still
 works — the sequencer records tagged relays, and KRON merges both attribution sources deduped by txid. But
 it structurally sees only sequencer-routed trades (that blind spot is why the payload tag exists), so treat
-it as legacy and move to the payload tag. A malformed sequencer `ref` is rejected with `400`; the deployed
+it as legacy and move to the payload tag (on the standard family, keep it until your tagged trades appear, as above). A malformed
+sequencer `ref` is rejected with `400`; the deployed
 sequencer advertises the field via `health().attribution`.
 
 In both markets, direct node submission also works under low contention — the sequencer is a

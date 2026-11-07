@@ -23,10 +23,26 @@ KRON's mainnet has run this schema since 2026-11-05, and it is approved for laun
 - A client still on 0.20 keeps working: it reads a pool's template from the registry, so a new pool's program reaches it like any
   other. Its `buildPoolV1Genesis` refuses a genesis past 1e9, and it has no check of a deposit or sale against an older pool's
   bound, so one past that bound is rejected on chain.
-- KRON's registry proves a new pool's genesis under the current program, then under `6b7ec42cd29a`, and the record names the one
-  that proved it, with that version's bounds.
+- KRON's registry proves a new pool's genesis under the current program, then under `6b7ec42cd29a`. A new pool on that earlier
+  version is recorded unlisted, withdraw only, and the record names the version. Pools already listed on it keep their program,
+  bounds and listing. 0.20's `fetchFamilyTemplates` takes the registry's current program, so only a stale page or a script asking
+  for the old schema builds such a pool.
 - Once a new pool has a tick, `GET /head` hands out nothing kept from the old one: `head` and `hint` are null until the new
   pool's first sequenced trade.
+
+### Added: `tradable` and `poolCovenantId` on market rows
+
+`IndexerClient.markets()` now returns `MarketRow`: `TokenInfo` plus an optional `tradable`, whether KRON has a market for the token
+now. `poolCovenantId` names the pool holding it, null while the token trades on its curve or has no pool. Newer indexers serve both;
+where they are absent, `kind: 'pool'` returns only tokens on a pool. Existing code keeps compiling.
+
+### Fixed: the docs showed only one way to tag a trade
+
+`covenantV1.assembleFamilyTx` takes no `ref`, so an integrator on a standard-family token or an imported token's pool who followed
+the docs had nowhere to put a partner tag. It takes the encoded payload, and has since 0.20: `payload:
+kron.partnerTag.encodePartnerTag('yourtag')`. The README, INTEGRATION.md, BUILDING-TRADES.md and WALLETS.md now show both ways.
+INTEGRATION.md says what to check on KRON's side, because its indexer credits the tag on that family only from the release that
+added this. SUPPORTING-KRON-TOKENS.md's `IndexerClient` sample also gains the `/v1/kcc20` its base URL needs.
 
 ## 0.20.0
 

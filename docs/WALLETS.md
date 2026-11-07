@@ -81,7 +81,9 @@ dApps surface it verbatim in their trade gates, so users see *why* signing is of
 
 If you're in KRON's wallet-integrator program ([kron.technology/wallets](https://kron.technology/wallets)),
 tag the trades your wallet builds so your volume is credited: pass your partner tag as `ref` to
-`kron.spend.assembleNativeTx` (SDK ≥ 0.13.0). The tag rides in the transaction payload, so it counts
+`kron.spend.assembleNativeTx` (SDK ≥ 0.13.0), or on a KCC-20 standard-family token as
+`payload: kron.partnerTag.encodePartnerTag('yourtag')` to `kron.covenantV1.assembleFamilyTx` (SDK ≥ 0.20.0).
+The tag rides in the transaction payload, so it counts
 however the trade is submitted — through the sequencer or straight to a node — and your credited volume is
 auditable from chain at any time:
 
@@ -92,6 +94,8 @@ GET https://idx.kron.technology/v1/kcc20/attribution?ref=yourtag
 Validate the tag against `kron.partnerTag.REF_RE` at your configuration boundary — an invalid tag is
 silently dropped (the trade still builds, untagged) and earns nothing. Full details — cost, security model,
 settlement: [BUILDING-TRADES.md § Partner attribution](BUILDING-TRADES.md#partner-attribution-integrator-program).
+KRON has so far run a tagged standard-family trade only with a raw-key signer, so try one through your own signing
+path first: [INTEGRATION.md § Partner attribution](INTEGRATION.md#partner-attribution).
 
 ## Discovery: announce your wallet to dApps
 

@@ -474,9 +474,16 @@ volume they route. Since **0.13.0** the attribution tag travels **in the transac
 credited however you submit them — through the sequencer or straight to a node:
 
 ```ts
+// KRON family: the assembler takes the tag
 const asm = kron.spend.assembleNativeTx(k, {
   spend, fundingEntries, changeAddress, networkFee,
   ref: 'yourtag',   // your partner tag → written to tx.payload as `kron:r:yourtag`
+});
+
+// KCC-20 standard family (standard launches, imported tokens' pools; since 0.20.0): it takes the encoded payload
+const asmV1 = kron.covenantV1.assembleFamilyTx(k, {
+  spend, fundingEntries, changeAddress, networkFee, networkId,
+  payload: kron.partnerTag.encodePartnerTag('yourtag'),   // the same `kron:r:yourtag`
 });
 ```
 
@@ -485,6 +492,8 @@ Audit your credited volume straight from chain —
 `kron.partnerTag.REF_RE` at your config boundary (an invalid tag is silently dropped and earns nothing).
 Costs ~0.00003 KAS per trade; no covenant logic is touched. Full details:
 [docs/BUILDING-TRADES.md § Partner attribution](docs/BUILDING-TRADES.md#partner-attribution-integrator-program).
+On the standard family, check that your first tagged trade appears at that address:
+[docs/INTEGRATION.md § Partner attribution](docs/INTEGRATION.md#partner-attribution) says why.
 
 > **Signing a tagged trade in the browser.** Kaspa commits `tx.payload` to the signature hash, so the tag
 > must be set *before* signing and survive it untouched. Some wallet extensions compute their `signPskt`
