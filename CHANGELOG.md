@@ -36,6 +36,9 @@ KRON's mainnet has run this schema since 2026-11-05, and it is approved for laun
 now. `poolCovenantId` names the pool holding it, null while the token trades on its curve or has no pool. Newer indexers serve both;
 where they are absent, `kind: 'pool'` returns only tokens on a pool. Existing code keeps compiling.
 
+`markets()` also takes `offset` and `limit`. The indexer serves 50 rows unless told otherwise and 500 at most, and the SDK had no way
+to ask for more, so a bare `markets()` is only the first page. To read every row, pass `limit: 500`, and `offset` to page past that.
+
 ### Fixed: the docs showed only one way to tag a trade
 
 `covenantV1.assembleFamilyTx` takes no `ref`, so an integrator on a standard-family token or an imported token's pool who followed

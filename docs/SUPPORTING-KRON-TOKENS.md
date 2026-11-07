@@ -25,7 +25,7 @@ import { client } from '@kronsdk/kron-sdk';
 
 const idx = new client.IndexerClient('https://idx.kron.technology/v1/kcc20'); // base URL per KRON's INTEGRATION.md
 
-await idx.markets({ kind: 'pool' });        // every graduated (pool) market — what an aggregator lists
+await idx.markets({ kind: 'pool', limit: 500 }); // every graduated (pool) market — what an aggregator lists
 await idx.token('sonar');                   // one token: covenantId, poolCovenantId, graduated, decimals, reserves
 await idx.balance('sonar', address);        // an address's balance of a token
 await idx.tokenlist(address);               // every token an address holds
@@ -35,7 +35,8 @@ await idx.tokenUtxos('sonar', address);     // the individual token UTXOs (what 
 `token()` returns the token's `covenantId` (the id a wallet tracks) and, once graduated, `poolCovenantId`
 (the pair id an aggregator lists). Branch on `graduated`. On a newer indexer each `markets()` row also says whether
 KRON has a market for the token now: `tradable`, and `poolCovenantId` for the pool holding it
-([INTEGRATION.md § Discovery / explore](INTEGRATION.md#discovery--explore)).
+([INTEGRATION.md § Discovery / explore](INTEGRATION.md#discovery--explore)). `markets()` returns 50 rows unless you pass
+`limit` (500 at most), with `offset` to page past that.
 
 ### 2. Move tokens — `kcc20.buildKcc20Send`
 

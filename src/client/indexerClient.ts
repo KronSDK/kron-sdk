@@ -81,7 +81,9 @@ export class IndexerClient {
   constructor(private baseUrl: string) {}
 
   info(): Promise<IndexerInfo> { return fetchJson(`${this.baseUrl}/info`); }
-  markets(opts: { kind?: 'curve' | 'pool' } = {}): Promise<MarketRow[]> { return fetchJson(`${this.baseUrl}/markets${qs(opts)}`); }
+  /** The indexer serves 50 rows unless told otherwise and 500 at most, so a bare `markets()` is only the first page: pass `limit`, and
+   *  `offset` to page past 500, to read them all. */
+  markets(opts: { kind?: 'curve' | 'pool'; offset?: number; limit?: number } = {}): Promise<MarketRow[]> { return fetchJson(`${this.baseUrl}/markets${qs(opts)}`); }
   topTraders(): Promise<unknown[]> { return fetchJson(`${this.baseUrl}/top-traders`); }
 
   token(tick: string): Promise<TokenInfo> { return fetchJson(`${this.baseUrl}/token/${encodeURIComponent(tick)}`); }

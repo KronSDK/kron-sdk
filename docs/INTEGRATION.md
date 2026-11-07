@@ -112,12 +112,15 @@ for typed access, or hit these directly.
 
 ```
 GET /v1/kcc20/info
-GET /v1/kcc20/markets?kind=curve|pool       # explore-table summary (launch feed / swap table)
+GET /v1/kcc20/markets?kind=curve|pool&offset=&limit=   # explore-table summary (launch feed / swap table)
 GET /v1/kcc20/top-traders                    # global volume leaderboard
 ```
 
 `info` → `{ result: { tokenTotal, daaScore, synced, network } }`. Poll `synced` before trusting freshness;
 `daaScore` is the chain point the view reflects.
+
+`markets` serves 50 rows unless you pass `limit` (500 at most), so a list of every token needs `limit=500`, with `offset` to page
+past that. In the SDK: `IndexerClient.markets({ limit: 500 })`.
 
 A `markets` row is a summary, so read `cpState` and the curve's id from the token row below. Newer indexers add two fields to
 every row. `tradable` is `true` when KRON has a market for the token that you can quote and trade against now. `poolCovenantId`
