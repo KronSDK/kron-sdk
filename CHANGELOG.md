@@ -41,8 +41,8 @@ where they are absent, `kind: 'pool'` returns only tokens on a pool. Existing co
 `covenantV1.assembleFamilyTx` takes no `ref`, so an integrator on a standard-family token or an imported token's pool who followed
 the docs had nowhere to put a partner tag. It takes the encoded payload, and has since 0.20: `payload:
 kron.partnerTag.encodePartnerTag('yourtag')`. The README, INTEGRATION.md, BUILDING-TRADES.md and WALLETS.md now show both ways.
-INTEGRATION.md says what to check on KRON's side, because its indexer credits the tag on that family only from the release that
-added this. SUPPORTING-KRON-TOKENS.md's `IndexerClient` sample also gains the `/v1/kcc20` its base URL needs.
+KRON's indexer has credited the tag on that family since 2026-11-07, and INTEGRATION.md says what to check. SUPPORTING-KRON-TOKENS.md's
+`IndexerClient` sample also gains the `/v1/kcc20` its base URL needs.
 
 ## 0.20.0
 

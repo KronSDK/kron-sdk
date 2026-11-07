@@ -266,8 +266,8 @@ Notes worth knowing:
   Reference behavior: `kron.spend.signPsktWithKey`. Raw-key server-side signers are unaffected.
 - The tag is unauthenticated: it's an auditable claim, not proof. Settlement is manual review.
 - Use the **same tag** as the one on your dashboard account — settlement joins on it.
-- On the KCC-20 standard family, check that your first tagged trade appears at the address above, and pass the
-  sequencer-side `ref` as well until it does: [INTEGRATION.md § Partner attribution](INTEGRATION.md#partner-attribution).
+- On the KCC-20 standard family, check that your first tagged trade appears at the address above:
+  [INTEGRATION.md § Partner attribution](INTEGRATION.md#partner-attribution).
 - A swap on a delisted pool writes no trade row, so it earns no credit.
 - Migrating from the sequencer-side `ref` field (pre-0.13.0)? It still records, and KRON merges both
   attribution sources deduped by txid — nothing double-counts. But that path only ever sees

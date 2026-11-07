@@ -716,11 +716,9 @@ boundary — `assembleNativeTx` and `encodePartnerTag` silently drop an invalid 
 still build), and a dropped tag earns nothing. Cost, security model, and settlement details:
 [BUILDING-TRADES.md § Partner attribution](BUILDING-TRADES.md#partner-attribution-integrator-program).
 
-**Standard-family credit.** The tag is valid on every standard-family trade, because no program reads `payload`. KRON's indexer
-credits it on that family only from the release that added this, so check that your first tagged trade appears at
-`/attribution?ref=yourtag`. If it doesn't yet, also pass `ref` on `submit()`/`curveSubmit()`, which the sequencer records; a tagged
-trade made in the meantime is credited by a backfill from chain. A swap on a delisted pool writes no trade row, so it earns no
-credit.
+**Standard-family credit.** The tag is valid on every standard-family trade, because no program reads `payload`, and KRON's indexer
+has credited it on that family since 2026-11-07. That credit is new, so check that your first tagged trade appears at
+`/attribution?ref=yourtag`. A swap on a delisted pool writes no trade row, so it earns no credit.
 
 **Known wallet limitation — browser signing and `payload`** (reported by kascov, 2026-08-10). Kaspa commits
 `tx.payload` to the signature hash, so the tag must be present *before* the transaction is signed and must
@@ -743,8 +741,7 @@ far run a tagged standard-family trade only with a raw-key signer, so try one th
 **Legacy sequencer-side `ref` (pre-0.13.0).** The optional `ref` field on `submit()`/`curveSubmit()` still
 works — the sequencer records tagged relays, and KRON merges both attribution sources deduped by txid. But
 it structurally sees only sequencer-routed trades (that blind spot is why the payload tag exists), so treat
-it as legacy and move to the payload tag (on the standard family, keep it until your tagged trades appear, as above). A malformed
-sequencer `ref` is rejected with `400`; the deployed
+it as legacy and move to the payload tag. A malformed sequencer `ref` is rejected with `400`; the deployed
 sequencer advertises the field via `health().attribution`.
 
 In both markets, direct node submission also works under low contention — the sequencer is a
