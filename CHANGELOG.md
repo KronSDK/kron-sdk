@@ -3,6 +3,28 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+> Version to be chosen at release. Proposed: **0.22.0**, because removing `earnedKas` breaks TypeScript that names it, and a
+> `^0.21.0` range would install a 0.21.1 without asking. 0.21.1 also fits if the change counts as a fix, since the field was
+> `undefined` in every release (0.19.1 made `SubmitResult.retry` optional in a patch). Replace this note with the version.
+
+### Fixed: `IndexerClient.lpEarnings()` is typed as the indexer answers
+
+`LpEarnings` declared `earnedKas: string`, a field KRON's indexer has never sent, so code reading it got `undefined` in every
+release since 0.1.1. The route answers `{ tick, address, feesKas, shares }`, and the type now says so: `feesKas` is a number in
+KAS, not sompi, and `shares` is a decimal string. Code that names `earnedKas` stops compiling; read `feesKas`.
+
+The type also has two optional fields that come with KRON's correction of the count, `since` (an ISO time, or null) and
+`restarted`. Until that correction the indexer credited voluntary shares in a graduated pool with the floor's part of each fee
+too, so `feesKas` read high by total shares ÷ voluntary shares (7.9× on KRON's pool on 2026-11-08). The corrected indexer
+restarts every position's count on its first start: `feesKas` counts from `since`, and `restarted: true` says older figures
+were dropped. An indexer from before the correction sends neither field.
+
+`lpEarnings()` throws on the route's 404, which is also what the KCC-20 standard family's tokens answer, imported tokens
+included: the indexer doesn't count fees for their pools yet. Its doc comment and `docs/INTEGRATION.md` §4 "LP positions" now
+say all this.
+
 ## 0.21.0
 
 ### Changed: imported tokens' pools have no practical token limit (schema `de046fcd1374`)

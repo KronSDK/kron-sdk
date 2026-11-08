@@ -57,7 +57,21 @@ export type PoolHead = {
   reserves: { kasReserve: string; tokenReserve: string; totalShares: string; lpCovid: string | null };
 };
 export type LpUtxo = { outpoint: { transactionId: string; index: number }; amount: string };
-export type LpEarnings = { tick: string; address: string; earnedKas: string };
+/** `GET /v1/kcc20/token/{tick}/lp/{address}/earnings`: the swap fees an address's LP shares have earned, apart from impermanent
+ *  loss. An address with no position reads 0 and '0'. `since` and `restarted` are absent on an indexer from before them, and
+ *  there `feesKas` reads high on a graduated pool (docs/INTEGRATION.md §4 "LP positions"). */
+export type LpEarnings = {
+  tick: string;
+  address: string;
+  /** KAS, not sompi, as a JSON number: the fees counted from `since` on. */
+  feesKas: number;
+  /** The address's LP shares, a decimal string. */
+  shares: string;
+  /** ISO time the indexer's count began; null when it keeps no count across restarts. */
+  since?: string | null;
+  /** `true` when the indexer dropped figures from before `since`. */
+  restarted?: boolean;
+};
 export type IndexerInfo = { tokenTotal: number; daaScore: number; synced: boolean; network: string };
 export type Trade = Record<string, unknown>;
 export type Holder = { address: string; balance: string };
@@ -138,6 +152,8 @@ export class IndexerClient {
   lpUtxos(tick: string, address: string): Promise<LpUtxo[]> {
     return fetchJson(`${this.baseUrl}/token/${encodeURIComponent(tick)}/lp/${encodeURIComponent(address)}/utxos`);
   }
+  /** Throws on the route's 404: a tick the indexer doesn't know or whose pool has no LP shares bound yet, or a token of the KCC-20
+   *  standard family (imported tokens included), whose pools the indexer doesn't count fees for yet. */
   lpEarnings(tick: string, address: string): Promise<LpEarnings> {
     return fetchJson(`${this.baseUrl}/token/${encodeURIComponent(tick)}/lp/${encodeURIComponent(address)}/earnings`);
   }

@@ -230,6 +230,18 @@ GET /v1/kcc20/token/{tick}/lp/{address}/utxos       # the address's LP-share UTX
 GET /v1/kcc20/token/{tick}/lp/{address}/earnings    # swap fees earned (KAS), excl. impermanent loss
 ```
 
+`earnings` returns `{ tick, address, feesKas, shares }`. `feesKas` is in KAS, not sompi, as a JSON number, and `shares` is the
+address's LP shares as a decimal string; an address with no position reads `0` and `"0"`. Tokens of the KCC-20 standard family,
+imported tokens included, aren't counted yet, so the route answers 404 for them. In the SDK: `IndexerClient.lpEarnings(tick,
+address)`, which throws on that 404. Up to 0.21.0 its type named the figure `earnedKas`, which the indexer never sent.
+
+Newer indexers add two fields. `since` is the ISO time the count began, null where the indexer keeps no count across restarts,
+and `feesKas` counts swaps from then on. `restarted: true` says the indexer dropped figures from before `since`, because until
+then the route over-counted graduated pools: a swap leaves only the voluntary part of the LP fee in the pool, and every share owns
+part of that, the locked floor's included, but the old count credited voluntary shares with all of it. So `feesKas` read high by
+total shares ÷ voluntary shares (7.9× on KRON's pool on 2026-11-08). Where the two fields are absent, a graduated pool's
+`feesKas` is still that over-count.
+
 ### Live updates (SSE) — don't poll
 
 ```
