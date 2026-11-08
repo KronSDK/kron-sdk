@@ -3,12 +3,7 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
-## Unreleased
-
-> Version to be chosen at release. Proposed: **0.22.0**, because removing `earnedKas` breaks TypeScript that names it, a
-> `^0.21.0` range would install a 0.21.1 without asking, and `poolCp.quoteAddLiquidityExact` is new. 0.21.1 also fits if
-> both changes count as fixes, since the field was `undefined` in every release (0.19.1 made `SubmitResult.retry` optional in a
-> patch). Replace this note with the version.
+## 0.22.0 (2026-11-08)
 
 ### Changed: a deposit into a graduated pool pays exactly the price of its shares
 
@@ -36,7 +31,8 @@ The type also has two optional fields that come with KRON's correction of the co
 `restarted`. Until that correction the indexer credited voluntary shares in a graduated pool with the floor's part of each fee
 too, so `feesKas` read high by total shares ÷ voluntary shares (7.9× on KRON's pool on 2026-11-08). The corrected indexer
 restarts every position's count on its first start: `feesKas` counts from `since`, and `restarted: true` says older figures
-were dropped. An indexer from before the correction sends neither field.
+were dropped. An indexer from before the correction sends neither field; KRON's mainnet indexer has sent both since
+2026-11-08 22:05 UTC.
 
 `lpEarnings()` throws on the route's 404, which is also what the KCC-20 standard family's tokens answer, imported tokens
 included: the indexer doesn't count fees for their pools yet. Its doc comment and `docs/INTEGRATION.md` §4 "LP positions" now
