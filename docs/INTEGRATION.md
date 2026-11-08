@@ -463,7 +463,11 @@ See [README.md](../README.md) for a quickstart.
   gated. **`buildRemoveLiquidity` requires
   `opts.lpInventory` — the pool's L-inventory UTXO — whenever `poolTpl.canonicalInventoryRequired` is true,
   which every live pool sets (≥ 0.13.2; earlier releases always built a shape every current pool rejects).
-  Fetch it the same way you already do for `buildAddLiquidity`.
+  Fetch it the same way you already do for `buildAddLiquidity`. **Size a deposit with
+  `kron.poolCp.quoteAddLiquidityExact(state, budget)`** and pass that quote to `buildAddLiquidity`: the deposit then pays
+  exactly the price of the whole shares the budget buys. The pool mints `floor(totalShares·dKas/kasReserve)` shares and keeps
+  all of `dKas`, so a quote of the whole budget (`quoteAddLiquidity(state, budget)`) gives it up to one share's worth of KAS
+  that mints nothing, 0.28 KAS of a 1 KAS deposit into KRON's pool on 2026-11-08. KRON's own deposit flow pays the exact price.
 - **`kcc20.transfer`** (`kron.kcc20.transferSigScript`) — the universal token move. The only way a token
   UTXO changes hands.
 
@@ -547,8 +551,10 @@ every share can close the pool (`poolKcc20.buildPoolV1ClosePool`). Its template 
 shape it with `templatesV1.compiledFromServerV1(program, pool)` and
 `poolKcc20.poolTemplateFromCompiledV1(compiled, params, tokenTemplate, program, pool.templateSchema)`, where the token
 template is the token's own program, served by the indexer at `GET /v1/kcc20/token/{tick}/program`. The swaps, deposits and
-withdrawals are the pool builders above. Deposits into an open pool are exact (`quoteAddLiquidityExactV1`), and a
-swap with no creator fee due pays the creator's output slot back to the trader.
+withdrawals are the pool builders above. Deposits are exact into every pool of the family: `buildPoolV1AddLiquidity` takes
+`dKas` as a budget and pays the price of the whole shares it buys (`quoteAddLiquidityExactV1`), which an open pool's program
+requires and a locked one accepts. Up to 0.21.0 it gave a locked pool the whole budget. A swap with no creator fee due pays
+the creator's output slot back to the trader.
 
 **Pool bounds.** A pool keeps the program it was created with, and its record's `templateSchema` names it. The open program
 from schema `de046fcd1374` holds up to 4,000,000,000,000,000,000 raw token units. Earlier open programs and the locked program

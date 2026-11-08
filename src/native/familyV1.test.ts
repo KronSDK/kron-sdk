@@ -13,7 +13,8 @@ import { hexOf, bytesOfHex } from './dispatchTag.js';
 import { p2pkOwnedV1, ZERO32, kcc20V1SpkForState, pushKcc20V1States, materializeKcc20V1Script, decodeKcc20V1State, type Kcc20V1State } from './kcc20V1Tx.js';
 import { SigScriptBuilder } from './sigscript.js';
 import { buildCurveV1Genesis, buildCurveV1Init, buildCurveV1Buy, buildCurveV1Sell, buildCurveV1Graduate, buildCurveV1BatchBuy, MAX_MERGE_PIECES, MAX_SELL_PIECES } from './curveKcc20Tx.js';
-import { buildPoolV1SwapKasForToken, buildPoolV1SwapTokenForKas, buildPoolV1AddLiquidity, buildPoolV1RemoveLiquidity, buildPoolV1BindLp, MAX_SHARES, MAX_TRADER_PIECES } from './poolKcc20Tx.js';
+import { buildPoolV1SwapKasForToken, buildPoolV1SwapTokenForKas, buildPoolV1AddLiquidity, buildPoolV1RemoveLiquidity, buildPoolV1BindLp, MAX_SHARES, MAX_TRADER_PIECES, quoteAddLiquidityV1 } from './poolKcc20Tx.js';
+import { SCALE } from '../curve/cpCurve.js';
 import { poolTemplateFromCompiledV1, buildPoolV1Genesis, buildPoolV1BindLpOpen, buildPoolV1ClosePool, poolV1GenesisState, quoteAddLiquidityExactV1, isOpenPoolV1, MAX_SEED_SHARES, type PoolV1Template, poolBoundsV1, addWithinBoundsV1, sellRoomV1 } from './poolKcc20Tx.js';
 import { compiledFromServerV1 } from './templatesV1.js';
 import { buildOrderV1Refund, orderEscrowV1 } from './orderKcc20Tx.js';
@@ -169,6 +170,30 @@ describe('every production shape assembles into a well-formed, in-cap v1 transac
     const three = [piece(0, KEYS.trader, 1n), piece(1, KEYS.trader, 1n), piece(2, KEYS.trader, 1n)];
     expect(() => buildTokenTransferV1(k, T.token, A, three, KEYS.trader.pub, KEYS.buyer2.pub, 3n)).toThrow(/1\.\.2/);
     expect(() => buildTokenTransferV1(k, T.token, A, [piece(0, KEYS.buyer2, 5n)], KEYS.trader.pub, KEYS.buyer2.pub, 1n)).toThrow(/not owned by the connected wallet key/);
+  });
+});
+
+describe('a deposit into a LOCKED pool pays exactly the price of its shares (KRON, 2026-11-08)', () => {
+  const st = { kasReserve: 40_943_040n, tokenReserve: 61_267_331n, tokenCovid: A, totalShares: 1_145_274n, lpCovid: LP }; // KRON's pool, mainnet
+  const poolUtxo = { ...op(0), state: st, tokenUtxo: { ...op(1), value: DUST } };
+  const lpInv = { ...op(3), value: DUST, amount: MAX_SHARES - st.totalShares };
+  const add = (budget: bigint, dToken: bigint) => buildPoolV1AddLiquidity(k, T.pool, poolUtxo, lpInv, P, LP, piece(2, KEYS.lp, dToken), KEYS.lp.pub, budget, { tokenDust: DUST, blake3 });
+  const view = (s: CovenantSpendV1) => ({ inputs: s.inputs.map((i) => [i.value, i.signatureScript, hexOf(i.redeem)]), outputs: s.outputs.map((o) => [o.value, String((o.scriptPublicKey as any).script ?? o.scriptPublicKey), o.role]) });
+
+  it('a 1 KAS budget buys the whole budget\'s 2 shares and 107 tokens for 72 units, not 100', async () => {
+    const whole = quoteAddLiquidityV1(st, 100n);
+    expect([whole.dKas, whole.dShares, whole.dToken]).toEqual([100n, 2n, 107n]);
+    const spend = add(100n, whole.dToken);
+    expect([spend.quote.dKas, spend.quote.dShares, spend.quote.dToken]).toEqual([72n, 2n, 107n]);
+    expect(spend.inputs[0].invocation.args.slice(0, 3)).toEqual([72n, 107n, 2n]);
+    expect(spend.outputs[0].value).toBe((st.kasReserve + 72n) * SCALE);
+    const f = [funding(4, KEYS.lp, 200n * KAS)];
+    const tx = await devSign(assemble(spend, f), spend, f);
+    expect(() => assertInvocationsV1(tx, spend)).not.toThrow();
+  });
+  it('an exact budget builds the same transaction, the one the whole-budget quote builds at 72 units', () => {
+    expect(view(add(72n, 107n))).toEqual(view(add(100n, 107n)));
+    expect(add(100n, 107n).quote).toEqual(quoteAddLiquidityV1(st, 72n));
   });
 });
 

@@ -132,8 +132,8 @@ type AddQuoteV1 = { dKas: bigint; dToken: bigint; dShares: bigint; newKas: bigin
 /** Whether an addLiquidity quote stays inside the program's bounds (the VM refuses it otherwise). */
 export const addWithinBoundsV1 = (q: AddQuoteV1, b: PoolV1Bounds): boolean =>
   q.dKas <= b.maxUnits && q.dToken <= b.maxToken && q.dShares <= MAX_SHARES && q.newKas <= b.maxUnits && q.newToken <= b.maxToken && q.newShares < MAX_SHARES;
-/** The largest deposit budget (KAS units) whose quote the pool still takes, or 0n when it is full. `quote` is the pool's own
- *  (quoteAddLiquidityExactV1 for an open pool, quoteAddLiquidityV1 for a locked one). */
+/** The largest deposit budget (KAS units) whose quote the pool still takes, or 0n when it is full. `quote` defaults to
+ *  quoteAddLiquidityExactV1, the price `buildPoolV1AddLiquidity` pays into every pool, open or locked. */
 export function maxAddKasUnitsV1<S extends Pick<PoolV1State, 'kasReserve' | 'tokenReserve' | 'totalShares'>>(state: S, b: PoolV1Bounds, quote: (s: S, d: bigint) => AddQuoteV1 | null = quoteAddLiquidityExactV1): bigint {
   const K = state.kasReserve, S = state.totalShares;
   if (K < 1n || state.tokenReserve < 1n || S < 1n || K >= b.maxUnits) return 0n;
@@ -203,12 +203,14 @@ export function buildPoolV1SwapTokenForKas(k: K, tpl: PoolV1Template, utxo: Pool
 }
 
 /** addLiquidity (D4 layout): inputs [pool, reserve, deposit (exactly dToken), LP inventory, LP P2PK]; outputs
- *  [pool, pool token, pool LP, LP shares]. */
+ *  [pool, pool token, pool LP, LP shares]. `dKas` is a budget: the deposit pays any pool exactly the price of the whole shares
+ *  the budget buys (quoteAddLiquidityExactV1), as an open pool's program requires and a locked one accepts, so the KAS above
+ *  that price stays in the funding change. */
 export function buildPoolV1AddLiquidity(k: K, tpl: PoolV1Template, utxo: PoolV1Utxo, lpInventory: LpInventoryUtxoV1, poolCovid: Uint8Array, lpCovid: Uint8Array, deposit: TokenUtxoV1, lpPubkey: Uint8Array, dKas: bigint, opts: { tokenDust?: bigint; blake3?: Blake3 } = {}): CovenantSpendV1 & { quote: AddLiquidityQuote } {
   const dust = opts.tokenDust ?? COVENANT_DUST, blake3Of = opts.blake3 ?? noBlake3;
   if (!utxo.state.lpCovid.some(Boolean)) throw new Error('the pool has not bound its LP token yet (bindLp first)');
   if (hexOf(utxo.state.lpCovid) !== hexOf(lpCovid)) throw new Error('lpCovid does not match the pool state');
-  const q = isOpenPoolV1(tpl) ? req(quoteAddLiquidityExactV1(utxo.state, dKas), 'addLiquidity') : quoteAddLiquidity(utxo.state, dKas);
+  const q = req(quoteAddLiquidityExactV1(utxo.state, dKas), 'addLiquidity');
   if (deposit.state.amount !== q.dToken) throw new Error(`the deposit piece must hold exactly ${q.dToken} tokens (split first)`);
   if (lpInventory.amount !== MAX_SHARES - utxo.state.totalShares) throw new Error('LP inventory does not match the pool state');
   const { tokenCovid: A } = utxo.state; const ext = utxo.tokenUtxo.extensionCommitment ?? ZERO32, lpExt = lpInventory.extensionCommitment ?? ZERO32;

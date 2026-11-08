@@ -5,9 +5,26 @@ All notable changes to this package are documented here. This project follows
 
 ## Unreleased
 
-> Version to be chosen at release. Proposed: **0.22.0**, because removing `earnedKas` breaks TypeScript that names it, and a
-> `^0.21.0` range would install a 0.21.1 without asking. 0.21.1 also fits if the change counts as a fix, since the field was
-> `undefined` in every release (0.19.1 made `SubmitResult.retry` optional in a patch). Replace this note with the version.
+> Version to be chosen at release. Proposed: **0.22.0**, because removing `earnedKas` breaks TypeScript that names it, a
+> `^0.21.0` range would install a 0.21.1 without asking, and `poolCp.quoteAddLiquidityExact` is new. 0.21.1 also fits if
+> both changes count as fixes, since the field was `undefined` in every release (0.19.1 made `SubmitResult.retry` optional in a
+> patch). Replace this note with the version.
+
+### Changed: a deposit into a graduated pool pays exactly the price of its shares
+
+Both pool programs mint `floor(totalShares·dKas/kasReserve)` shares and keep all of `dKas`, so a deposit sized from a budget
+gave the pool the KAS above the price of its whole shares for nothing: up to one share's worth, 0.28 KAS of a 1 KAS deposit
+into KRON's pool on 2026-11-08. KRON's deposit flow now pays exactly `ceil(dShares·kasReserve/totalShares)` into every pool,
+and so does the SDK. The programs accept that pair as they accept any floored one, and they are unchanged.
+
+- `poolKcc20.buildPoolV1AddLiquidity` takes `dKas` as a budget for a locked pool too, as it already did for an open one, and
+  pays `quoteAddLiquidityExactV1`'s price. You get the same shares for the same tokens, and the KAS left over stays in your
+  funding change. The deposit piece is still the quote's `dToken`, the same number a quote of the whole budget gives, so
+  existing callers keep working. An exact `dKas` builds the same transaction as before, and verify:parity:v1's locked deposit
+  is one. A budget under one share's price now throws `addLiquidity: no quote for these amounts`, as on an open pool.
+- `poolCp.quoteAddLiquidityExact(state, maxDKas)` is new, for `amm_pool_cp_v3`. Pass its quote to `poolCp.buildAddLiquidity`.
+  `quoteAddLiquidity(state, dKas)` still takes all of `dKas`, and its doc comment now says so.
+- `maxAddKasUnitsV1` already defaulted to the exact quote. Its doc comment now says that quote fits every pool.
 
 ### Fixed: `IndexerClient.lpEarnings()` is typed as the indexer answers
 

@@ -262,13 +262,32 @@ export function snapAddDKas(state: PoolCpState, desiredDKas: bigint): bigint {
 /** Size a balanced deposit from `dKas` (SCALE units), FLOORED to match the covenant: dShares =
  *  floor(totalShares·dKas/kasReserve) (the depositor never gets more than their KAS-contribution fraction, so
  *  existing LPs aren't diluted), dToken = ceil(tokenReserve·dShares/totalShares) (they supply ≥ the proportional
- *  token). Any dKas ≥ addMinDKas works; throws only if dKas rounds to 0 shares. */
+ *  token). Any dKas ≥ addMinDKas works; throws only if dKas rounds to 0 shares. It takes ALL of `dKas`, so the KAS
+ *  above the price of the whole shares (up to one share's worth) goes to the pool and mints nothing: to size a
+ *  deposit from a budget, use `quoteAddLiquidityExact`. */
 export function quoteAddLiquidity(state: PoolCpState, dKas: bigint): AddLiquidityQuote {
   if (dKas <= 0n) throw new Error('dKas must be positive');
   const dShares = (state.totalShares * dKas) / state.kasReserve; // floor
   if (dShares <= 0n) throw new Error('dKas too small to mint an integer LP share (snap with snapAddDKas / addMinDKas first)');
   const dToken = (state.tokenReserve * dShares + state.totalShares - 1n) / state.totalShares; // ceil(tokenReserve·dShares/totalShares)
   return { dKas, dToken, dShares, newKas: state.kasReserve + dKas, newToken: state.tokenReserve + dToken, newShares: state.totalShares + dShares };
+}
+
+/** Size a deposit from a budget of `maxDKas` (SCALE units) at exactly the price of the whole shares it buys: dShares =
+ *  floor(totalShares·maxDKas/kasReserve), paid dKas = ceil(dShares·kasReserve/totalShares) ≤ maxDKas. The pair is the floored
+ *  one the covenant requires (the quote equals `quoteAddLiquidity(state, dKas)`): the same shares and tokens as the whole
+ *  budget, without the KAS that would mint nothing. KRON's deposit flow sizes every pool's deposit this way; it is the
+ *  arithmetic of `poolKcc20.quoteAddLiquidityExactV1`. null when the budget buys no share. Pass the quote to `buildAddLiquidity`. */
+export function quoteAddLiquidityExact(state: Pick<PoolCpState, 'kasReserve' | 'tokenReserve' | 'totalShares'>, maxDKas: bigint): AddLiquidityQuote | null {
+  const K = state.kasReserve, T = state.tokenReserve, S = state.totalShares;
+  if (K < 1n || T < 1n || S < 1n || maxDKas < 1n) return null;
+  let dShares = (S * maxDKas) / K;
+  if (dShares < 1n) return null;
+  const dKas = (dShares * K + S - 1n) / S;
+  dShares = (S * dKas) / K;
+  const dToken = (T * dShares + S - 1n) / S;
+  if (dToken < 1n) return null;
+  return { dKas, dToken, dShares, newKas: K + dKas, newToken: T + dToken, newShares: S + dShares };
 }
 
 /** The smallest withdrawable dShares — at least ONE side must round positive, per the covenant's

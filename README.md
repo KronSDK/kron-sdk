@@ -269,7 +269,7 @@ entry. The on-chain verifier above is version-independent and needs none of this
 kron-sdk
 ├─ curve            constant-product curve math (BigInt, mirrors curve_cp.sil exactly)
 ├─ curveCp           curve_cp builders against an EXISTING curve: buy / sell / graduate
-├─ poolCp / poolCpV3 amm_pool_cp_v3 builders: swap / addLiquidity / removeLiquidity / bindLp
+├─ poolCp / poolCpV3 amm_pool_cp_v3 builders: swap / addLiquidity (quoteAddLiquidityExact) / removeLiquidity / bindLp
 ├─ kcc20              the KCC-20 token covenant: transfer / ownership modes / state encoding
 ├─ vesting            claim / claimFinal against an EXISTING vesting lock
 ├─ spend              tx assembly + the signPskt-style wallet-signing bridge
@@ -281,7 +281,7 @@ kron-sdk
 ├─ ── KCC-20 STANDARD family (0.20, `cp.family === 'kcc20v1'`; see the next section) ──
 ├─ kcc20V1            the KCC-20 reference token program: state codec, owner witnesses, P2SH addresses, transfer scripts
 ├─ curveKcc20         curve_kcc20 builders: init / buy / sell / graduate / batchBuy
-├─ poolKcc20          pool_kcc20 builders: swapKasForToken / swapTokenForKas / addLiquidity / removeLiquidity / bindLp;
+├─ poolKcc20          pool_kcc20 builders: swapKasForToken / swapTokenForKas / addLiquidity (exact) / removeLiquidity / bindLp;
 │                     an imported token's pool: genesis, and pool_open_kcc20 (nothing locked): bindLpOpen / exact deposits / closePool
 ├─ orderKcc20         order_kcc20 (refundable buy orders): escrow maths, refund
 ├─ transferKcc20      holder-to-holder transfers of standard tokens (1–2 pieces, change)
