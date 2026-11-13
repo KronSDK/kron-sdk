@@ -3,6 +3,15 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+### Fixed: the original family's builder refuses the two token states KRON's own builder refuses
+
+`kcc20.materializeKcc20Script`, `pushKcc20StateScalar` and `pushKcc20States` now throw, with KRON's messages, on a covenant-id
+(`0x02`) owner of 32 zero bytes, which anyone can spend on tokens pinned to schemas before `bdbcfb2540d1…` (the audited baseline
+`a9b901ac9269…` among them), and on an `identifierType` outside 0–3, which nothing can ever move. 32 zero bytes under `0x03`, the
+burn address, still build.
+
 ## 0.22.0 (2026-11-08)
 
 ### Changed: a deposit into a graduated pool pays exactly the price of its shares

@@ -36,6 +36,32 @@ export type Kcc20Template = { script: Uint8Array; stateStart: number; maxIns: nu
 
 const STATE_LEN = 46;
 
+/** Reject states that are structurally anyone-can-spend or permanently unspendable, before they can become a
+ *  token output or a declared successor. The same guard, with the same messages, as KRON's own builder
+ *  (kron web/src/native/kcc20Tx.ts, on the site since 2026-08-24):
+ *
+ *   - identifierType outside 0-3 (audit HLK-L10): no dispatch branch matches, so every future spend hits
+ *     `require(false)`. The successor is creatable and then permanently unspendable (a brick).
+ *   - COVENANT_ID (0x02) with an all-zero owner (HLK-L09): `OpInputCovenantId` returns the zero hash for any
+ *     ordinary (non-covenant) input, so a zero-owned covenant-id balance is satisfied by anyone who attaches a
+ *     plain input — anyone-can-spend.
+ *
+ *  Every kcc20.sil before `bdbcfb2540d1…` checks neither on chain, so for tokens pinned to those schemas (the
+ *  audited baseline `a9b901ac9269…` and `4de67d8649eb…` among them) this is the only check. An all-zero owner
+ *  under ADDRESS (0x03) is left alone: it is a P2PK to the zero pubkey, the burn address
+ *  kaspa:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkx9awp4e, an unspendable and legitimate sink.
+ *  Unlike KRON's copy, a type that is not an integer is refused too: the splice would store "2" or 2.5 as 0x02,
+ *  past the zero-owner check. */
+function assertSpendableKcc20State(state: Kcc20State): void {
+  const t = state.identifierType;
+  if (!Number.isInteger(t) || t < IDENTIFIER.PUBKEY || t > IDENTIFIER.ADDRESS) {
+    throw new Error(`kcc20 identifierType must be 0-3 (got ${t}); a successor outside this range is permanently unspendable`);
+  }
+  if (t === IDENTIFIER.COVENANT_ID && state.ownerIdentifier.length === 32 && state.ownerIdentifier.every((byte) => byte === 0)) {
+    throw new Error('kcc20 covenant-id owner must not be all-zero: OpInputCovenantId returns the zero hash for any ordinary input, making the balance anyone-can-spend');
+  }
+}
+
 // --- redeem-script materialization (the 46-byte state splice) -----------------------------------
 
 /** Produce the kcc20 redeem script for `state` by splicing the 46-byte region. Byte-identical to silverc. */
@@ -47,6 +73,7 @@ export function materializeKcc20Script(tpl: Kcc20Template, state: Kcc20State): U
   }
   if (state.ownerIdentifier.length !== 32) throw new Error('ownerIdentifier must be 32 bytes');
   if (state.amount < 0n) throw new Error('amount must be non-negative');
+  assertSpendableKcc20State(state);
   const out = t.slice();
   out[s] = 0x20;
   out.set(state.ownerIdentifier, s + 1);
@@ -174,12 +201,14 @@ export const addressPresenceOwned = (pubkey32: Uint8Array, amount: bigint): Kcc2
  *  entrypoints whose covenant takes individual structs (e.g. curve buy/sell/graduate, pool swap). */
 export function pushKcc20StateScalar(b: SigScriptBuilder, st: Kcc20State): void {
   if (st.ownerIdentifier.length !== 32) throw new Error('ownerIdentifier must be 32 bytes');
+  assertSpendableKcc20State(st);
   b.data(st.ownerIdentifier).byte(st.identifierType).int(st.amount).bool(st.isMinter);
 }
 
 /** Push a `State[]` arg column-major (owners ‖ types ‖ amounts ‖ isMinters), per build_sig_script. */
 export function pushKcc20States(b: SigScriptBuilder, states: Kcc20State[]): void {
   for (const st of states) if (st.ownerIdentifier.length !== 32) throw new Error('ownerIdentifier must be 32 bytes');
+  for (const st of states) assertSpendableKcc20State(st);
   b.column(states.map((s) => s.ownerIdentifier)); // byte[32][] column
   b.column(states.map((s) => Uint8Array.of(s.identifierType))); // byte[] column
   b.column(states.map((s) => int8LE(s.amount))); // int[] column (8-byte LE each)
