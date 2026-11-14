@@ -3,7 +3,7 @@
 All notable changes to this package are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
-## Unreleased
+## 0.22.1 (2026-11-14)
 
 ### Fixed: the original family's builder refuses the two token states KRON's own builder refuses
 
